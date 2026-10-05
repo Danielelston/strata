@@ -400,6 +400,11 @@ pub struct FileEntry {
     pub size: MetadataValue<u64>,
     pub modified_unix_seconds: MetadataValue<i64>,
     pub recent_unix_seconds: MetadataValue<i64>,
+    /// The entry's `recent://` registry URI, present only for rows enumerated from the Recent
+    /// location. Distinct from `location`, which for a Recent-view row is the resolved target
+    /// (the real file), not the recent-files-registry handle. Required by "Remove from Recent"
+    /// (issue #1476): the wrong URI there either silently deletes the real file or no-ops.
+    pub recent_uri: Option<String>,
     pub mode: MetadataValue<u32>,
     pub image_dimensions: MetadataValue<(u32, u32)>,
     pub child_count: MetadataValue<u64>,

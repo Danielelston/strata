@@ -1896,3 +1896,147 @@ fn cancelled_media_details_are_not_cached_as_unavailable() {
     assert_eq!(update.duration_seconds, MetadataValue::Unknown);
     assert!(cached_icon_details_for_revisit(&path).is_none());
 }
+
+#[derive(Clone, Default)]
+struct FakeRemovalBackend {
+    calls: Rc<RefCell<Vec<String>>>,
+    outcomes: Rc<RefCell<HashMap<String, Result<(), String>>>>,
+    hold: Rc<Cell<bool>>,
+}
+
+impl FakeRemovalBackend {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn fail(&self, uri: &str, error: &str) {
+        self.outcomes
+            .borrow_mut()
+            .insert(uri.to_owned(), Err(error.to_owned()));
+    }
+}
+
+impl RecentRemovalBackend for FakeRemovalBackend {
+    fn delete(&self, uri: &str) -> RecentEnumerationFuture<Result<(), String>> {
+        self.calls.borrow_mut().push(uri.to_owned());
+        if self.hold.get() {
+            return Box::pin(std::future::pending());
+        }
+        let outcome = self.outcomes.borrow().get(uri).cloned().unwrap_or(Ok(()));
+        Box::pin(async move { outcome })
+    }
+}
+
+/// Drives `glib::MainContext::default()` until `done` is satisfied or a safety deadline
+/// elapses, the same pattern `cancelling_recent_enumeration_stops_further_publication` uses to
+/// progress a `spawn_local` task from a test.
+fn drain_until(done: impl Fn() -> bool) {
+    let context = glib::MainContext::default();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !done() && Instant::now() < deadline {
+        context.iteration(true);
+    }
+    assert!(
+        done(),
+        "the removal task did not complete within the deadline"
+    );
+}
+
+#[test]
+fn recent_removal_calls_delete_and_logs_success() {
+    let _serial = ASYNC_MAIN_CONTEXT_DEFAULT
+        .lock()
+        .expect("the async test lock should not be poisoned");
+    let state = RecentRemovalState::new();
+    let backend = Rc::new(FakeRemovalBackend::new());
+    let backend_dyn: Rc<dyn RecentRemovalBackend> = backend.clone();
+    let uri = "recent:///success".to_owned();
+
+    let output = capture_logs(|| {
+        recent_remove_entries_with_backend(&state, &backend_dyn, [uri.clone()]);
+        drain_until(|| state.in_flight.borrow().is_empty());
+    });
+
+    assert_eq!(*backend.calls.borrow(), vec![uri.clone()]);
+    assert!(state.in_flight.borrow().is_empty());
+    assert!(output.contains("removed recent entry"));
+    assert!(output.contains(&uri));
+}
+
+#[test]
+fn recent_removal_failure_logs_a_warning_and_leaves_the_entry_in_place() {
+    let _serial = ASYNC_MAIN_CONTEXT_DEFAULT
+        .lock()
+        .expect("the async test lock should not be poisoned");
+    let state = RecentRemovalState::new();
+    let backend = Rc::new(FakeRemovalBackend::new());
+    let uri = "recent:///locked".to_owned();
+    backend.fail(&uri, "xbel is locked");
+    let backend_dyn: Rc<dyn RecentRemovalBackend> = backend.clone();
+
+    let output = capture_logs(|| {
+        recent_remove_entries_with_backend(&state, &backend_dyn, [uri.clone()]);
+        drain_until(|| state.in_flight.borrow().is_empty());
+    });
+
+    assert_eq!(*backend.calls.borrow(), vec![uri.clone()]);
+    // A failed delete() never panics and is left for the view's existing list/rescan to keep
+    // showing -- this function does not track or remove entries from any list itself.
+    assert!(output.contains("failed to remove recent entry"));
+    assert!(output.contains(&uri));
+    assert!(output.contains("xbel is locked"));
+    assert!(state.in_flight.borrow().is_empty());
+}
+
+#[test]
+fn rapid_double_invocation_on_the_same_uri_does_not_issue_two_concurrent_deletes() {
+    let _serial = ASYNC_MAIN_CONTEXT_DEFAULT
+        .lock()
+        .expect("the async test lock should not be poisoned");
+    let state = RecentRemovalState::new();
+    let backend = Rc::new(FakeRemovalBackend::new());
+    backend.hold.set(true);
+    let backend_dyn: Rc<dyn RecentRemovalBackend> = backend.clone();
+    let uri = "recent:///double-click".to_owned();
+
+    recent_remove_entries_with_backend(&state, &backend_dyn, [uri.clone()]);
+    drain_until(|| !backend.calls.borrow().is_empty());
+    assert_eq!(
+        backend.calls.borrow().len(),
+        1,
+        "the first removal should have called delete() once"
+    );
+
+    recent_remove_entries_with_backend(&state, &backend_dyn, [uri.clone()]);
+
+    assert_eq!(
+        backend.calls.borrow().len(),
+        1,
+        "a second removal for an in-flight URI must not call delete() again"
+    );
+    assert!(state.in_flight.borrow().contains(&uri));
+}
+
+#[test]
+fn multi_selection_removal_issues_one_delete_per_uri() {
+    let _serial = ASYNC_MAIN_CONTEXT_DEFAULT
+        .lock()
+        .expect("the async test lock should not be poisoned");
+    let state = RecentRemovalState::new();
+    let backend = Rc::new(FakeRemovalBackend::new());
+    let backend_dyn: Rc<dyn RecentRemovalBackend> = backend.clone();
+    let uris = vec![
+        "recent:///one".to_owned(),
+        "recent:///two".to_owned(),
+        "recent:///three".to_owned(),
+    ];
+
+    recent_remove_entries_with_backend(&state, &backend_dyn, uris.clone());
+    drain_until(|| state.in_flight.borrow().is_empty());
+
+    let mut called = backend.calls.borrow().clone();
+    called.sort();
+    let mut expected = uris;
+    expected.sort();
+    assert_eq!(called, expected);
+}

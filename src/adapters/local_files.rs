@@ -2,7 +2,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     future::Future,
     io::ErrorKind,
@@ -374,6 +374,7 @@ fn entry_from_info(location: Location, info: gio::FileInfo) -> FileEntry {
         child_count: MetadataValue::Unknown,
         duration_seconds: MetadataValue::Unknown,
         is_hidden: info_is_hidden(&info),
+        recent_uri: None,
     }
 }
 
@@ -396,11 +397,13 @@ fn recent_target_location(info: &gio::FileInfo) -> Option<Location> {
 
 fn recent_entry_from_target(
     recent_info: &gio::FileInfo,
+    recent_uri: String,
     target_location: Location,
     target_info: gio::FileInfo,
 ) -> Option<FileEntry> {
     let mut entry = entry_from_info(target_location, target_info);
     entry.recent_unix_seconds = recent_unix_seconds(recent_info);
+    entry.recent_uri = Some(recent_uri);
     let final_location_is_recent = entry
         .location
         .uri_value()
@@ -410,14 +413,21 @@ fn recent_entry_from_target(
 
 // Resolve concurrently so one unreachable target cannot consume the batch's deadline.
 async fn resolve_recent_batch(
-    infos: Vec<gio::FileInfo>,
+    infos: Vec<(gio::FileInfo, String)>,
     include_metadata: bool,
     deadline: Instant,
 ) -> Vec<RecentEntryResolution> {
     let context = glib::MainContext::default();
     let pending: Vec<_> = infos
         .into_iter()
-        .map(|info| context.spawn_local(resolve_recent_entry(info, include_metadata, deadline)))
+        .map(|(info, recent_uri)| {
+            context.spawn_local(resolve_recent_entry(
+                info,
+                recent_uri,
+                include_metadata,
+                deadline,
+            ))
+        })
         .collect();
     let mut resolutions = Vec::with_capacity(pending.len());
     for handle in pending {
@@ -428,6 +438,7 @@ async fn resolve_recent_batch(
 
 async fn resolve_recent_entry(
     recent_info: gio::FileInfo,
+    recent_uri: String,
     include_metadata: bool,
     deadline: Instant,
 ) -> RecentEntryResolution {
@@ -454,9 +465,11 @@ async fn resolve_recent_entry(
     )
     .await
     {
-        Ok(Ok(target_info)) => recent_entry_from_target(&recent_info, target_location, target_info)
-            .map(Box::new)
-            .map_or(RecentEntryResolution::Stale, RecentEntryResolution::Entry),
+        Ok(Ok(target_info)) => {
+            recent_entry_from_target(&recent_info, recent_uri, target_location, target_info)
+                .map(Box::new)
+                .map_or(RecentEntryResolution::Stale, RecentEntryResolution::Entry)
+        }
         Ok(Err(_)) => RecentEntryResolution::Stale,
         Err(_) => RecentEntryResolution::TimedOut,
     }
@@ -566,6 +579,7 @@ fn scan_native_directory(
             child_count: MetadataValue::Unknown,
             duration_seconds: MetadataValue::Unknown,
             is_hidden,
+            recent_uri: None,
         };
         if let Some(details) = cached_details {
             details.apply_to_entry(&mut entry);
@@ -801,8 +815,18 @@ impl RecentEnumerationSource for GioRecentEnumerationSource {
             if files.is_empty() {
                 return Ok(None);
             }
+            // The enumerator's own `recent://` child handle is each entry's exact removal
+            // URI; `standard::target-uri` on the same FileInfo is the resolved real file,
+            // a different handle that `recent_remove_entries` must never be given.
+            let files_with_uri: Vec<(gio::FileInfo, String)> = files
+                .into_iter()
+                .map(|info| {
+                    let uri = enumerator.child(&info).uri().to_string();
+                    (info, uri)
+                })
+                .collect();
             Ok(Some(
-                resolve_recent_batch(files, include_metadata, deadline).await,
+                resolve_recent_batch(files_with_uri, include_metadata, deadline).await,
             ))
         })
     }
@@ -925,6 +949,86 @@ fn enumerate_recent_with_source(
         }
     });
     LoadHandle::new(move || task.abort())
+}
+
+/// Backend for dropping a single `recent://` entry, abstracted so tests can double it without
+/// touching the real GVfs recent-files registry.
+trait RecentRemovalBackend {
+    fn delete(&self, uri: &str) -> RecentEnumerationFuture<Result<(), String>>;
+}
+
+/// Calls `gio::File::delete()` on the entry's `recent://` handle. GIO's recent-files GVfs
+/// backend defines this as "drop the entry from the recent list," not "delete the real file" --
+/// the same semantics `GioRecentEnumerationSource` relies on for listing, so removal and listing
+/// share one source of truth. This must never be swapped for `gtk::RecentManager::remove_item`;
+/// there is no reason to maintain two mechanisms for the same registry.
+struct GioRecentRemovalBackend;
+
+impl RecentRemovalBackend for GioRecentRemovalBackend {
+    fn delete(&self, uri: &str) -> RecentEnumerationFuture<Result<(), String>> {
+        let file = gio::File::for_uri(uri);
+        Box::pin(async move {
+            file.delete_future(glib::Priority::DEFAULT)
+                .await
+                .map_err(|error| error.to_string())
+        })
+    }
+}
+
+/// Per-URI in-flight guard for `recent://` removals, shared by every call site that can trigger
+/// "Remove from Recent" (single or multi-selection). A URI already being removed is skipped
+/// until that removal completes, successfully or not, so a double-click or a rescan racing the
+/// removal cannot fire `delete()` twice concurrently for the same entry.
+#[derive(Clone, Default)]
+pub(crate) struct RecentRemovalState {
+    in_flight: Rc<RefCell<HashSet<String>>>,
+}
+
+impl RecentRemovalState {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+}
+
+fn recent_remove_entries_with_backend(
+    state: &RecentRemovalState,
+    backend: &Rc<dyn RecentRemovalBackend>,
+    uris: impl IntoIterator<Item = String>,
+) {
+    for uri in uris {
+        if !state.in_flight.borrow_mut().insert(uri.clone()) {
+            tracing::debug!(uri = %uri, "recent removal already in flight, skipping duplicate");
+            continue;
+        }
+        tracing::debug!(uri = %uri, "removing recent entry");
+        let in_flight = state.in_flight.clone();
+        let backend = backend.clone();
+        glib::MainContext::default().spawn_local(async move {
+            let result = backend.delete(&uri).await;
+            in_flight.borrow_mut().remove(&uri);
+            match result {
+                Ok(()) => tracing::debug!(uri = %uri, "removed recent entry"),
+                Err(error) => tracing::warn!(
+                    uri = %uri,
+                    error = %error,
+                    "failed to remove recent entry; leaving it in the list"
+                ),
+            }
+        });
+    }
+}
+
+/// Removes one or more `recent://` entries, given their exact `recent://` URIs (not the
+/// resolved target location -- `FileEntry::location` for a Recent-view row carries the latter).
+/// Accepts both single-item and multi-selection invocations via any `IntoIterator<Item =
+/// String>`. Never panics and never surfaces a user-facing error; failures are logged and the
+/// entry is simply left in the list for the view's own rescan to reconcile.
+pub(crate) fn recent_remove_entries(
+    state: &RecentRemovalState,
+    uris: impl IntoIterator<Item = String>,
+) {
+    let backend: Rc<dyn RecentRemovalBackend> = Rc::new(GioRecentRemovalBackend);
+    recent_remove_entries_with_backend(state, &backend, uris);
 }
 
 impl FileSource for LocalFileSource {
