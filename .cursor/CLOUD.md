@@ -1,7 +1,8 @@
 # Cursor Cloud Agent: running tests
 
 This is the machine-specific runbook for the Cursor Cloud Agent
-environment used with `lgse/strata`. It records commands that were
+environment used with the `Danielelston/strata` fork (`origin`; upstream
+`lgse/strata` is the `upstream` remote). It records commands that were
 verified on this VM. Product rules in `AGENTS.md` still apply; this
 file only explains how to satisfy them here.
 

@@ -45,14 +45,33 @@ or `npx skills update`. Do not commit `.agents/`.
 
 ## Branching and pull requests
 
-All changes to `main` go through a pull request. The normal process is:
+Development happens on the
+[`Danielelston/strata`](https://github.com/Danielelston/strata) fork;
+[`lgse/strata`](https://github.com/lgse/strata) is the upstream source of truth.
+The fork is `origin` and upstream is `upstream`:
 
-1. Create or select a GitHub issue and assign it before starting work.
-2. Update local `main`, then create a branch from it.
+```bash
+git clone https://github.com/Danielelston/strata.git
+cd strata
+git remote add upstream https://github.com/lgse/strata.git
+git fetch upstream
+```
+
+All changes to the fork's `main` go through a pull request. The normal process is:
+
+1. Create or select a GitHub issue in the fork and assign it before starting work.
+2. Update local `main` from `origin`, then create a branch from it.
 3. Name the branch `<type>/<issue-number>-<short-kebab-description>`, such as `feat/6-sandbox-previews` or `fix/42-preview-timeout`.
-4. Make focused Conventional Commits and push the branch.
-5. Open a pull request that references the issue and wait for CI.
-6. The maintainer tests the pull request before it is merged. Do not push directly to `main`.
+4. Make focused Conventional Commits and push the branch to `origin`.
+5. Open a pull request against `Danielelston/strata:main` that references the issue and wait for CI.
+6. Do not push directly to `main` on either remote.
+
+Rebase a branch on upstream before opening or updating its pull request:
+
+```bash
+git fetch upstream
+git rebase upstream/main
+```
 
 Use the Conventional Commit form for commit messages and pull request titles:
 
