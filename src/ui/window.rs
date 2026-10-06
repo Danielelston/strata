@@ -24,9 +24,9 @@ use crate::{
 
 use super::{
     browser::{
-        BrowserView, PeekBehavior, PinStatus, PreparedFileDrop, WeakBrowserView, file_drop_action,
-        file_drop_commit, locations_from_file_list_value, prepare_file_drop_target,
-        show_error_dialog,
+        BrowserView, PeekBehavior, PinStatus, PreparedFileDrop, WeakBrowserView,
+        arm_spring_load_navigation, file_drag_hover_target, file_drop_action, file_drop_commit,
+        locations_from_file_list_value, prepare_file_drop_target, show_error_dialog,
     },
     browser_modes::{BrowserDensity, BrowserMode},
     controls::{ModalTone, focus_button, message_dialog_description, message_dialog_layout},
@@ -1196,7 +1196,7 @@ fn event_changes_trash_contents(event: &BrowserEvent) -> bool {
     matches!(
         event,
         BrowserEvent::DeletionFinished { .. }
-            | BrowserEvent::RestorationFinished
+            | BrowserEvent::RestorationFinished { .. }
             | BrowserEvent::TransferFinished { .. }
             | BrowserEvent::OperationCompletedWithErrors { .. }
             | BrowserEvent::OperationCancelled { .. }
@@ -2589,6 +2589,14 @@ fn sidebar_accepts_file_drop(location: &Location) -> bool {
     location.native_path().is_some()
 }
 
+fn row_toggle_drop_highlight(row: &impl IsA<gtk::Widget>, hovered: bool) {
+    if hovered {
+        row.add_css_class("drop-destination");
+    } else {
+        row.remove_css_class("drop-destination");
+    }
+}
+
 fn install_sidebar_file_drop(
     view: &BrowserView,
     row: &impl IsA<gtk::Widget>,
@@ -2610,12 +2618,71 @@ fn install_sidebar_file_drop(
         move || Some(destination.clone())
     });
     drop.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let spring_navigate: Rc<dyn Fn(Location)> = {
+        let view = view.downgrade();
+        let row = row.downgrade();
+        Rc::new(move |location| {
+            let Some(view) = view.upgrade() else {
+                return;
+            };
+            view.browser().navigate_location(location, false);
+            if let Some(row) = row.upgrade() {
+                row.grab_focus();
+            }
+        })
+    };
+    let highlighted_row = row.downgrade();
     let state_for_enter = drop_state.clone();
-    drop.connect_enter(move |target, _, _| file_drop_action(target, &state_for_enter));
+    let navigate_for_enter = spring_navigate.clone();
+    drop.connect_enter(move |target, _, _| {
+        let action = file_drop_action(target, &state_for_enter);
+        let hovered = file_drag_hover_target(&state_for_enter, target).is_some();
+        if let Some(row) = highlighted_row.upgrade() {
+            row_toggle_drop_highlight(&row, hovered);
+        }
+        arm_spring_load_navigation(&state_for_enter, target, &navigate_for_enter);
+        action
+    });
+    let highlighted_row = row.downgrade();
     let state_for_motion = drop_state.clone();
-    drop.connect_motion(move |target, _, _| file_drop_action(target, &state_for_motion));
+    let navigate_for_motion = spring_navigate.clone();
+    drop.connect_motion(move |target, _, _| {
+        let action = file_drop_action(target, &state_for_motion);
+        let hovered = file_drag_hover_target(&state_for_motion, target).is_some();
+        if let Some(row) = highlighted_row.upgrade() {
+            row_toggle_drop_highlight(&row, hovered);
+        }
+        arm_spring_load_navigation(&state_for_motion, target, &navigate_for_motion);
+        action
+    });
+    let highlighted_row = row.downgrade();
+    let state_for_value = drop_state.clone();
+    let navigate_for_value = spring_navigate.clone();
+    drop.connect_value_notify(move |target| {
+        if target.current_drop().is_none() {
+            return;
+        }
+        let hovered = file_drag_hover_target(&state_for_value, target).is_some();
+        if let Some(row) = highlighted_row.upgrade() {
+            row_toggle_drop_highlight(&row, hovered);
+        }
+        arm_spring_load_navigation(&state_for_value, target, &navigate_for_value);
+    });
+    let highlighted_row = row.downgrade();
+    let state_for_leave = drop_state.clone();
+    drop.connect_leave(move |_| {
+        state_for_leave.cancel_spring_load_navigation();
+        if let Some(row) = highlighted_row.upgrade() {
+            row_toggle_drop_highlight(&row, false);
+        }
+    });
     let view = view.downgrade();
+    let highlighted_row = row.downgrade();
     drop.connect_drop(move |target, value, _, _| {
+        drop_state.cancel_spring_load_navigation();
+        if let Some(row) = highlighted_row.upgrade() {
+            row_toggle_drop_highlight(&row, false);
+        }
         let Some(view) = view.upgrade() else {
             return false;
         };

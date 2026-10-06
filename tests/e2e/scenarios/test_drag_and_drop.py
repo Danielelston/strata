@@ -76,6 +76,49 @@ def test_dragging_a_file_onto_a_folder_moves_it(strata, mode):
 
 
 @pytest.mark.parametrize("mode", ALL_MODES)
+def test_spring_navigation_keeps_the_file_drag_usable(strata, mode):
+    source = strata.entry("todo.txt")
+    target = strata.entry("documents")
+    strata.pointer.drag_points(
+        strata.pointer.drag_origin(source), target.screen_bounds().center, release=False
+    )
+    try:
+        strata.wait(lambda: strata.pane("documents"), "spring navigation into documents")
+        crumb = strata.wait(
+            lambda: strata.window.find(role="button", name=strata.fixture.root.name),
+            "source folder breadcrumb",
+        )
+        strata.pointer.move_to(*crumb.screen_bounds().center)
+        strata.wait_for_directory(strata.fixture.root.name)
+        target = strata.entry("documents")
+        strata.pointer.move_to(*target.screen_bounds().center)
+        strata.wait(lambda: strata.pane("documents"), "second spring navigation")
+        pane = strata.pane("documents").screen_bounds()
+        strata.pointer.move_to(pane.x + pane.width // 2, pane.y + pane.height - 20)
+    finally:
+        strata.pointer.connection.button(1, False)
+    strata.wait(
+        lambda: strata.fixture.path("documents/todo.txt").exists(),
+        "the held file to drop after spring navigation",
+    )
+    assert not strata.fixture.path("todo.txt").exists()
+    assert strata.fixture.path("documents/todo.txt").read_text() == "todo\n"
+
+
+@pytest.mark.parametrize("mode", ALL_MODES)
+def test_dropping_on_a_parent_breadcrumb_moves_the_file(strata, mode):
+    strata.open_directory("documents")
+    crumb = strata.wait(
+        lambda: strata.window.find(role="button", name=strata.fixture.root.name),
+        "parent breadcrumb",
+    )
+    strata.pointer.drag(strata.entry("notes.txt", directory="documents"), crumb)
+    strata.wait(lambda: strata.fixture.path("notes.txt").exists(), "breadcrumb drop")
+    assert not strata.fixture.path("documents/notes.txt").exists()
+    assert strata.fixture.path("notes.txt").read_text() == "notes\n"
+
+
+@pytest.mark.parametrize("mode", ALL_MODES)
 @pytest.mark.parametrize("recursive", [
     pytest.param(False, marks=pytest.mark.preferences(filter_include_subfolders=False)),
     pytest.param(True, marks=pytest.mark.preferences(filter_include_subfolders=True)),

@@ -2184,7 +2184,8 @@ scrollbar.horizontal > range > trough > slider {
 }
 
 .sidebar-row.reorderable:drop(active),
-.sidebar-row:drop(active) {
+.sidebar-row:drop(active),
+.sidebar-row.drop-destination {
   background: alpha(@strata_highlight, 0.46);
   outline-color: alpha(@strata_accent, 0.72);
   transform: scale(1.02);
@@ -5549,8 +5550,8 @@ menubutton.icons-thumbnail-menu > button:focus-visible {
 .file-icons > child .icons-card.drop-destination .icons-card-icon-frame,
 .file-icons > child .icons-card:drop(active) .icons-card-icon-frame {
   background: alpha(@strata_highlight, 0.82);
-  outline: 2px solid @strata_accent;
-  outline-offset: -2px;
+  outline: 1px solid @strata_accent;
+  outline-offset: -1px;
 }
 
 .icons-card.dragging {
@@ -5688,6 +5689,7 @@ menubutton.icons-thumbnail-menu > button:focus-visible {
 .list-row.drop-destination,
 .list-row:drop(active) {
   background: alpha(@strata_highlight, 0.82);
+  border-radius: 6px;
   color: @strata_accent;
   outline-color: @strata_accent;
 }

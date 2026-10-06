@@ -259,7 +259,7 @@ fn parked_delete_finishes_without_cancelling_foreground_and_respects_permanent_u
                 request_id: id,
                 completed: 1,
                 total: 1,
-                deleted_location: Some(deleted.clone()),
+                deleted_locations: vec![deleted.clone()],
             },
         );
         operations.emit(
