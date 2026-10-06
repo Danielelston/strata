@@ -1403,8 +1403,6 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     }
     for button in [&remove_from_recent, &remove_from_recent_multiple] {
         connect_selection_action(button, &popover, state, &target, |state, entries| {
-            // One `delete()` per selected entry, same as Copy/Delete multi-selection in this
-            // menu; no batching or cap. No confirmation, no toast, no undo (locked decision).
             let uris = entries.into_iter().filter_map(|entry| entry.recent_uri);
             crate::adapters::recent_remove_entries(&state.recent_removal, uris);
         });
@@ -1597,9 +1595,6 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
             let restorable = entries.iter().all(|entry| is_trash_item(&entry.location));
             restore.set_visible(restorable);
             restore_multiple.set_visible(restorable);
-            // Gate on `recent_uri` rather than re-deriving `in_recent` here: this is the
-            // same per-entry defensiveness `restorable` applies above, in case a selection
-            // ever mixes Recent-view rows with rows from elsewhere (e.g. search results).
             let recent_removable = in_recent
                 && !entries.is_empty()
                 && entries.iter().all(|entry| entry.recent_uri.is_some());

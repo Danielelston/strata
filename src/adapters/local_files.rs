@@ -821,9 +821,7 @@ impl RecentEnumerationSource for GioRecentEnumerationSource {
             if files.is_empty() {
                 return Ok(None);
             }
-            // The enumerator's own `recent://` child handle is each entry's exact removal
-            // URI; `standard::target-uri` on the same FileInfo is the resolved real file,
-            // a different handle that `recent_remove_entries` must never be given.
+            // Delete the registry handle, never standard::target-uri (the real file).
             let files_with_uri: Vec<(gio::FileInfo, String)> = files
                 .into_iter()
                 .map(|info| {
@@ -957,17 +955,11 @@ fn enumerate_recent_with_source(
     LoadHandle::new(move || task.abort())
 }
 
-/// Backend for dropping a single `recent://` entry, abstracted so tests can double it without
-/// touching the real GVfs recent-files registry.
 trait RecentRemovalBackend {
     fn delete(&self, uri: &str) -> RecentEnumerationFuture<Result<(), String>>;
 }
 
-/// Calls `gio::File::delete()` on the entry's `recent://` handle. GIO's recent-files GVfs
-/// backend defines this as "drop the entry from the recent list," not "delete the real file" --
-/// the same semantics `GioRecentEnumerationSource` relies on for listing, so removal and listing
-/// share one source of truth. This must never be swapped for `gtk::RecentManager::remove_item`;
-/// there is no reason to maintain two mechanisms for the same registry.
+// GVfs recent deletion removes the registry entry without touching its target.
 struct GioRecentRemovalBackend;
 
 impl RecentRemovalBackend for GioRecentRemovalBackend {
@@ -981,10 +973,6 @@ impl RecentRemovalBackend for GioRecentRemovalBackend {
     }
 }
 
-/// Per-URI in-flight guard for `recent://` removals, shared by every call site that can trigger
-/// "Remove from Recent" (single or multi-selection). A URI already being removed is skipped
-/// until that removal completes, successfully or not, so a double-click or a rescan racing the
-/// removal cannot fire `delete()` twice concurrently for the same entry.
 #[derive(Clone, Default)]
 pub(crate) struct RecentRemovalState {
     in_flight: Rc<RefCell<HashSet<String>>>,
@@ -1002,6 +990,10 @@ fn recent_remove_entries_with_backend(
     uris: impl IntoIterator<Item = String>,
 ) {
     for uri in uris {
+        if !gio::File::for_uri(&uri).has_uri_scheme("recent") {
+            tracing::warn!("refusing to remove a non-recent URI from the registry");
+            continue;
+        }
         if !state.in_flight.borrow_mut().insert(uri.clone()) {
             tracing::debug!(uri = %uri, "recent removal already in flight, skipping duplicate");
             continue;
@@ -1024,11 +1016,6 @@ fn recent_remove_entries_with_backend(
     }
 }
 
-/// Removes one or more `recent://` entries, given their exact `recent://` URIs (not the
-/// resolved target location -- `FileEntry::location` for a Recent-view row carries the latter).
-/// Accepts both single-item and multi-selection invocations via any `IntoIterator<Item =
-/// String>`. Never panics and never surfaces a user-facing error; failures are logged and the
-/// entry is simply left in the list for the view's own rescan to reconcile.
 pub(crate) fn recent_remove_entries(
     state: &RecentRemovalState,
     uris: impl IntoIterator<Item = String>,

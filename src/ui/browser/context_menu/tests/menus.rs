@@ -47,11 +47,13 @@ impl FileSource for MenuSource {
                     },
                     size: MetadataValue::Known(5),
                     modified_unix_seconds: MetadataValue::Known(0),
-                    mode: MetadataValue::Known(if matches!(name, "run-me" | "folder" | "photos.zip") {
-                        0o755
-                    } else {
-                        0o644
-                    }),
+                    mode: MetadataValue::Known(
+                        if matches!(name, "run-me" | "folder" | "photos.zip") {
+                            0o755
+                        } else {
+                            0o644
+                        },
+                    ),
                     recent_unix_seconds: MetadataValue::Unknown,
                     is_hidden: false,
                     image_dimensions: MetadataValue::Unknown,
@@ -381,7 +383,6 @@ fn remove_from_recent_is_gated_on_the_recent_location() {
                 .build();
             window.present();
 
-            // Not shown for an ordinary location.
             view.browser().navigate(Location::local(fixture.path()));
             wait_until(|| label(&view.widget(), "notes.txt").is_some());
             let menu = open_menu(&view, Some("notes.txt"));
@@ -395,7 +396,6 @@ fn remove_from_recent_is_gated_on_the_recent_location() {
             menu.popdown();
             wait_until(|| !menu.is_mapped());
 
-            // Shown only for the Recent location, alongside (not replacing) the other options.
             view.browser().navigate(Location::uri("recent:///"));
             wait_until(|| label(&view.widget(), "notes.txt").is_some());
             let menu = open_menu(&view, Some("notes.txt"));

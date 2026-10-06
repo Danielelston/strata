@@ -1999,22 +1999,23 @@ impl FakeRemovalBackend {
 impl RecentRemovalBackend for FakeRemovalBackend {
     fn delete(&self, uri: &str) -> RecentEnumerationFuture<Result<(), String>> {
         self.calls.borrow_mut().push(uri.to_owned());
-        if self.hold.get() {
-            return Box::pin(std::future::pending());
-        }
+        let hold = self.hold.clone();
         let outcome = self.outcomes.borrow().get(uri).cloned().unwrap_or(Ok(()));
-        Box::pin(async move { outcome })
+        Box::pin(async move {
+            while hold.get() {
+                glib::timeout_future(Duration::from_millis(1)).await;
+            }
+            outcome
+        })
     }
 }
 
-/// Drives `glib::MainContext::default()` until `done` is satisfied or a safety deadline
-/// elapses, the same pattern `cancelling_recent_enumeration_stops_further_publication` uses to
-/// progress a `spawn_local` task from a test.
 fn drain_until(done: impl Fn() -> bool) {
     let context = glib::MainContext::default();
     let deadline = Instant::now() + Duration::from_secs(5);
     while !done() && Instant::now() < deadline {
-        context.iteration(true);
+        context.iteration(false);
+        std::thread::sleep(Duration::from_millis(1));
     }
     assert!(
         done(),
@@ -2044,7 +2045,7 @@ fn recent_removal_calls_delete_and_logs_success() {
 }
 
 #[test]
-fn recent_removal_failure_logs_a_warning_and_leaves_the_entry_in_place() {
+fn recent_removal_failure_logs_a_warning_and_allows_retry() {
     let _serial = ASYNC_MAIN_CONTEXT_DEFAULT
         .lock()
         .expect("the async test lock should not be poisoned");
@@ -2060,12 +2061,13 @@ fn recent_removal_failure_logs_a_warning_and_leaves_the_entry_in_place() {
     });
 
     assert_eq!(*backend.calls.borrow(), vec![uri.clone()]);
-    // A failed delete() never panics and is left for the view's existing list/rescan to keep
-    // showing -- this function does not track or remove entries from any list itself.
     assert!(output.contains("failed to remove recent entry"));
     assert!(output.contains(&uri));
     assert!(output.contains("xbel is locked"));
-    assert!(state.in_flight.borrow().is_empty());
+    backend.outcomes.borrow_mut().remove(&uri);
+    recent_remove_entries_with_backend(&state, &backend_dyn, [uri.clone()]);
+    drain_until(|| state.in_flight.borrow().is_empty());
+    assert_eq!(*backend.calls.borrow(), vec![uri.clone(), uri]);
 }
 
 #[test]
@@ -2088,6 +2090,7 @@ fn rapid_double_invocation_on_the_same_uri_does_not_issue_two_concurrent_deletes
     );
 
     recent_remove_entries_with_backend(&state, &backend_dyn, [uri.clone()]);
+    glib::MainContext::default().block_on(glib::timeout_future(Duration::from_millis(10)));
 
     assert_eq!(
         backend.calls.borrow().len(),
@@ -2095,6 +2098,8 @@ fn rapid_double_invocation_on_the_same_uri_does_not_issue_two_concurrent_deletes
         "a second removal for an in-flight URI must not call delete() again"
     );
     assert!(state.in_flight.borrow().contains(&uri));
+    backend.hold.set(false);
+    drain_until(|| state.in_flight.borrow().is_empty());
 }
 
 #[test]
@@ -2119,4 +2124,25 @@ fn multi_selection_removal_issues_one_delete_per_uri() {
     let mut expected = uris;
     expected.sort();
     assert_eq!(called, expected);
+}
+
+#[test]
+fn recent_removal_rejects_real_file_uris() {
+    let _serial = ASYNC_MAIN_CONTEXT_DEFAULT.lock().expect("async test lock");
+    let fixture = tempfile::NamedTempFile::new().expect("target file");
+    let state = RecentRemovalState::new();
+    let backend = Rc::new(FakeRemovalBackend::new());
+    let backend_dyn: Rc<dyn RecentRemovalBackend> = backend.clone();
+    recent_remove_entries_with_backend(
+        &state,
+        &backend_dyn,
+        [
+            gio::File::for_path(fixture.path()).uri().to_string(),
+            "smb://server/share/file".to_owned(),
+        ],
+    );
+    glib::MainContext::default().block_on(glib::timeout_future(Duration::from_millis(10)));
+    assert!(backend.calls.borrow().is_empty());
+    assert!(fixture.path().exists());
+    assert!(state.in_flight.borrow().is_empty());
 }
