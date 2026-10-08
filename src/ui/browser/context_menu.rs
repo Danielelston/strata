@@ -28,6 +28,25 @@ mod presentation;
 
 const CONTEXT_MENU_EDGE_MARGIN: i32 = 16;
 
+/// Marks the `gtk::Box` wrapper that `commands::collect` turns into a submenu
+/// row instead of flattening its nested buttons into top-level rows.
+pub(super) const SUBMENU_ROW_CLASS: &str = "item-context-submenu";
+/// Marks the nested box holding a submenu row's entries.
+pub(super) const SUBMENU_ENTRIES_CLASS: &str = "item-context-submenu-entries";
+
+fn submenu_row(header: &gtk::Button, entries: [&gtk::Button; 3]) -> gtk::Box {
+    let wrapper = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    wrapper.add_css_class(SUBMENU_ROW_CLASS);
+    wrapper.append(header);
+    let entries_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    entries_box.add_css_class(SUBMENU_ENTRIES_CLASS);
+    for entry in entries {
+        entries_box.append(entry);
+    }
+    wrapper.append(&entries_box);
+    wrapper
+}
+
 fn context_menu_placement(anchor_height: i32, click_y: f64) -> (gtk::PositionType, i32) {
     let click_y = click_y.round() as i32;
     let above = click_y.clamp(0, anchor_height);
@@ -812,6 +831,27 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
         "Open",
         ContextHint::Open,
     );
+    let open_in = item_context_option(
+        crate::assets::icons::EXTERNAL_LINK,
+        "Open in…",
+        ContextHint::None,
+    );
+    let open_in_current = item_context_option(
+        crate::assets::icons::EXTERNAL_LINK,
+        "Open",
+        ContextHint::Open,
+    );
+    let open_in_window = item_context_option(
+        crate::assets::icons::APP_WINDOW,
+        "Open in New Window",
+        ContextHint::OpenInNewWindow,
+    );
+    let open_in_tab = item_context_option(
+        crate::assets::icons::PLUS,
+        "Open in New Tab",
+        ContextHint::OpenInNewTab,
+    );
+    let open_in_submenu = submenu_row(&open_in, [&open_in_current, &open_in_window, &open_in_tab]);
     let open_with = item_context_option(
         crate::assets::icons::APP_WINDOW,
         "Open With…",
@@ -939,6 +979,7 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     single_open.append(&group);
     single_open.append(&group_separator);
     single_open.append(&open);
+    single_open.append(&open_in_submenu);
     single_open.append(&open_with);
     single_open.append(&preview);
     single_open.append(&open_file_location);
@@ -980,6 +1021,34 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
         crate::assets::icons::EXTERNAL_LINK,
         "Open",
         ContextHint::OpenMultiple,
+    );
+    let open_in_multiple = item_context_option(
+        crate::assets::icons::EXTERNAL_LINK,
+        "Open in…",
+        ContextHint::None,
+    );
+    let open_in_current_multiple = item_context_option(
+        crate::assets::icons::EXTERNAL_LINK,
+        "Open",
+        ContextHint::OpenMultiple,
+    );
+    let open_in_window_multiple = item_context_option(
+        crate::assets::icons::APP_WINDOW,
+        "Open in New Window",
+        ContextHint::OpenInNewWindow,
+    );
+    let open_in_tab_multiple = item_context_option(
+        crate::assets::icons::PLUS,
+        "Open in New Tab",
+        ContextHint::OpenInNewTab,
+    );
+    let open_in_multiple_submenu = submenu_row(
+        &open_in_multiple,
+        [
+            &open_in_current_multiple,
+            &open_in_window_multiple,
+            &open_in_tab_multiple,
+        ],
     );
     let open_with_multiple = item_context_option(
         crate::assets::icons::APP_WINDOW,
@@ -1065,6 +1134,7 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     multiple_open.append(&group_multiple);
     multiple_open.append(&group_multiple_separator);
     multiple_open.append(&open_multiple);
+    multiple_open.append(&open_in_multiple_submenu);
     multiple_open.append(&open_with_multiple);
     multiple_open.append(&restore_multiple);
     multiple_open.append(&remove_from_recent_multiple);
@@ -1111,23 +1181,22 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
         if let Some(popover) = open_popover.upgrade() {
             popover.popdown();
         }
-        let Some((position, entry)) = open_target.borrow().clone() else {
-            return;
-        };
         if let Some(state) = weak.upgrade() {
-            if let Some(position) = current_context_position(&state, depth, position, &entry) {
-                if state.mode_views.borrow().mode() == BrowserMode::Columns {
-                    state.browser.activate(depth, position);
-                } else {
-                    state.browser.activate_in_place(depth, position);
-                }
-            } else if entry.is_directory() {
-                state.browser.navigate(entry.location);
-            } else {
-                state.browser.open_location(entry.location);
-            }
+            open_context_target(&state, depth, &open_target);
         }
     });
+    for (button, target_kind) in [
+        (&open_in, OpenInTarget::Current),
+        (&open_in_current, OpenInTarget::Current),
+        (&open_in_window, OpenInTarget::Window),
+        (&open_in_tab, OpenInTarget::Tab),
+        (&open_in_multiple, OpenInTarget::Current),
+        (&open_in_current_multiple, OpenInTarget::Current),
+        (&open_in_window_multiple, OpenInTarget::Window),
+        (&open_in_tab_multiple, OpenInTarget::Tab),
+    ] {
+        connect_open_in(button, &popover, state, &target, depth, target_kind);
+    }
     let open_file_location_target = target.clone();
     let open_file_location_state = Rc::downgrade(state);
     let open_file_location_popover = popover.downgrade();
@@ -1605,6 +1674,10 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
             compress_multiple.set_visible(can_compress);
             preview.set_visible(crate::ui::preview::entry_supports_quick_preview(&entry));
             print.set_visible(entry_supports_printing(&entry));
+            open.set_visible(!entry.is_directory());
+            open_in_submenu.set_visible(entry.is_directory());
+            open_in_multiple_submenu
+                .set_visible(entries.len() > 1 && entries.iter().any(|entry| entry.is_directory()));
             open_terminal.set_visible(entry.is_directory() && can_open_terminal(&entry.location));
             let search_or_filter = context_filter_or_search_active(&state, depth);
             let in_different_folder =
@@ -1675,6 +1748,80 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     });
     widget.add_controller(click);
     open_at
+}
+
+#[derive(Clone, Copy)]
+enum OpenInTarget {
+    Current,
+    Window,
+    Tab,
+}
+
+/// The submenu row's default action and its "Open" entry: activate the clicked
+/// entry in the current view, exactly as the flat `Open` row did.
+fn open_context_target(
+    state: &Rc<ViewState>,
+    depth: usize,
+    target: &RefCell<Option<ContextTarget>>,
+) {
+    let Some((position, entry)) = target.borrow().clone() else {
+        return;
+    };
+    if let Some(position) = current_context_position(state, depth, position, &entry) {
+        if state.mode_views.borrow().mode() == BrowserMode::Columns {
+            state.browser.activate(depth, position);
+        } else {
+            state.browser.activate_in_place(depth, position);
+        }
+    } else if entry.is_directory() {
+        state.browser.navigate(entry.location);
+    } else {
+        state.browser.open_location(entry.location);
+    }
+}
+
+fn connect_open_in(
+    button: &gtk::Button,
+    popover: &gtk::Popover,
+    state: &Rc<ViewState>,
+    target: &Rc<RefCell<Option<ContextTarget>>>,
+    depth: usize,
+    target_kind: OpenInTarget,
+) {
+    let weak_state = Rc::downgrade(state);
+    let weak_popover = popover.downgrade();
+    let target = target.clone();
+    button.connect_clicked(move |_| {
+        if let Some(popover) = weak_popover.upgrade() {
+            popover.popdown();
+        }
+        let Some(state) = weak_state.upgrade() else {
+            return;
+        };
+        match target_kind {
+            OpenInTarget::Current => open_context_target(&state, depth, &target),
+            OpenInTarget::Window => open_selected_in_action(&state, &target, "open-window-at"),
+            OpenInTarget::Tab => open_selected_in_action(&state, &target, "open-tab-at"),
+        }
+    });
+}
+
+/// Opens every selected directory in its own new tab or window through unit 1's
+/// window actions. Files in the selection are skipped: they have no target.
+fn open_selected_in_action(
+    state: &Rc<ViewState>,
+    target: &RefCell<Option<ContextTarget>>,
+    action: &str,
+) {
+    for entry in context_entries(state, target) {
+        if !entry.is_directory() {
+            continue;
+        }
+        let uri = gio_file_for_location(&entry.location).uri().to_variant();
+        if let Err(error) = state.overlay.activate_action(action, Some(&uri)) {
+            tracing::warn!(%error, action, "open-in-new location action unavailable");
+        }
+    }
 }
 
 fn current_context_position(
