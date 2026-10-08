@@ -1800,8 +1800,8 @@ fn connect_open_in(
         };
         match target_kind {
             OpenInTarget::Current => open_context_target(&state, depth, &target),
-            OpenInTarget::Window => open_selected_in_action(&state, &target, "open-window-at"),
-            OpenInTarget::Tab => open_selected_in_action(&state, &target, "open-tab-at"),
+            OpenInTarget::Window => open_selected_in_action(&state, &target, "win.open-window-at"),
+            OpenInTarget::Tab => open_selected_in_action(&state, &target, "win.open-tab-at"),
         }
     });
 }
