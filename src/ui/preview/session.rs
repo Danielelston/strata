@@ -12,7 +12,7 @@ impl PreviewDrawer {
     }
 
     pub(in crate::ui) fn reserves_empty_preview(&self) -> bool {
-        self.state.reserves_empty_preview() || self.state.reserves_column_space()
+        self.state.reserves_empty_preview()
     }
 
     pub(in crate::ui) fn action(&self) -> gio::SimpleAction {
@@ -37,13 +37,11 @@ impl PreviewState {
 
     pub(super) fn refresh_panel_action(&self) {
         self.enabled_action
-            .set_state(&(self.is_enabled() || self.reserves_column_space()).to_variant());
+            .set_state(&self.is_enabled().to_variant());
     }
 
     pub(super) fn toggle_panel(self: &Rc<Self>, entry: Option<FileEntry>, depth: Option<usize>) {
-        let enabled = self.is_enabled() || self.reserves_column_space();
-        self.reserve_columns.set(!enabled);
-        if enabled {
+        if self.is_enabled() {
             self.dismissed.set(true);
             self.close();
         } else {
@@ -55,15 +53,12 @@ impl PreviewState {
         if self.is_enabled() {
             self.close();
         } else {
-            self.reserve_columns.set(true);
             self.dismissed.set(false);
             self.set_enabled(true);
             self.focus_archive_on_ready.set(true);
-            let folder = entry.as_ref().is_some_and(FileEntry::is_directory);
             if let Some(entry) = entry.and_then(|entry| preview_target(Some(entry))) {
                 self.show(entry, depth);
             } else {
-                self.child_pane.set(folder && self.browsing_columns());
                 self.clear_target();
             }
         }
@@ -97,7 +92,7 @@ impl PreviewState {
             self.show_placeholder();
         } else {
             self.hide_panel();
-            if !reserves_empty_preview && !self.reserves_column_space() {
+            if !reserves_empty_preview {
                 self.release_sidebar_rail();
             }
         }

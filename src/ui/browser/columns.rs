@@ -24,7 +24,7 @@ use crate::ui::browser::paths::is_trash_root;
 use crate::ui::browser::presentation::LoadPresentation;
 use crate::ui::browser_modes::{ClickActivation, ClickCount};
 use crate::ui::entry_list_model::EntryListModel;
-use crate::ui::motion::{animations_enabled, emphasized_deceleration};
+use crate::ui::motion::{animations_enabled, emphasized_acceleration, emphasized_deceleration};
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use std::cell::{Cell, RefCell};
@@ -134,6 +134,17 @@ pub(super) fn install_resize_edges(state: &Rc<ViewState>) {
             return;
         };
         state.column_resizing.set(true);
+        let column = state
+            .columns
+            .borrow()
+            .iter()
+            .find(|c| c.shell == shell)
+            .cloned();
+        if let Some(column) = &column {
+            column
+                .animation_generation
+                .set(column.animation_generation.get().saturating_add(1));
+        }
         let now = glib::monotonic_time() as u64;
         let autofit = last_press
             .borrow()
@@ -143,13 +154,25 @@ pub(super) fn install_resize_edges(state: &Rc<ViewState>) {
             });
         *last_press.borrow_mut() = Some((shell.clone(), now));
         if autofit {
+            let Some(column) = column else {
+                gesture.set_state(gtk::EventSequenceState::Denied);
+                return;
+            };
+            let animation_id = column.animation_generation.get();
             let max_natural = shell
                 .first_child()
                 .and_downcast::<gtk::Overlay>()
                 .and_then(|overlay| overlay.child())
                 .map(|column| max_child_natural_width(&column))
                 .unwrap_or(COLUMN_WIDTH);
-            shell.set_size_request(max_natural.max(COLUMN_WIDTH), -1);
+            let target_width = max_natural.max(COLUMN_WIDTH);
+            animate_column_resize(
+                &shell,
+                &column.animation_generation,
+                animation_id,
+                shell.width().max(COLUMN_WIDTH),
+                target_width,
+            );
             remember_column_width(&state, &shell);
             gesture.set_state(gtk::EventSequenceState::Claimed);
             return;
@@ -640,6 +663,51 @@ fn animate_column_entry(column: &gtk::Box, generation: &Rc<Cell<u64>>) {
     });
 }
 
+fn animate_column_exit(state: &Rc<ViewState>, column: ColumnView, animation_id: u64) {
+    column.shell.add_css_class("column-exiting");
+    let weak = Rc::downgrade(state);
+    let generation = column.animation_generation.clone();
+    if !animations_enabled() {
+        state.columns_widget.remove(&column.shell);
+        state.overlay.remove_overlay(&column.marquee.band());
+        return;
+    }
+    // Width and opacity are driven from the same tick (not a separate CSS
+    // keyframe) so they never drift out of lockstep.
+    let start_width = column
+        .shell
+        .width()
+        .max(column.shell.width_request())
+        .max(0);
+    let started = Instant::now();
+    let shell = column.shell.downgrade();
+    let _tick = column.shell.clone().add_tick_callback(move |_, _| {
+        if generation.get() != animation_id {
+            return glib::ControlFlow::Break;
+        }
+        let Some(widget) = shell.upgrade() else {
+            return glib::ControlFlow::Break;
+        };
+        let progress =
+            (started.elapsed().as_secs_f64() / COLUMN_TRANSITION.as_secs_f64()).clamp(0.0, 1.0);
+        // Accelerate in, not decelerate: this column is leaving, so motion
+        // should stay slow at the start instead of front-loading the shrink.
+        let eased = emphasized_acceleration(progress);
+        let width = (f64::from(start_width) * (1.0 - eased)).round().max(0.0) as i32;
+        widget.set_size_request(width, -1);
+        widget.set_opacity(1.0 - eased);
+        if progress < 1.0 {
+            return glib::ControlFlow::Continue;
+        }
+        widget.set_size_request(0, -1);
+        if let Some(state) = weak.upgrade() {
+            state.columns_widget.remove(&column.shell);
+            state.overlay.remove_overlay(&column.marquee.band());
+        }
+        glib::ControlFlow::Break
+    });
+}
+
 fn remember_column_width(state: &ViewState, shell: &gtk::Box) {
     let preferences = crate::ui::preferences::PreferenceManager::shared();
     let width = (f64::from(shell.width_request()) / preferences.interface_scale()).round() as i32;
@@ -714,6 +782,43 @@ fn animate_horizontal_scroll(
     });
 }
 
+fn animate_column_resize(
+    shell: &gtk::Box,
+    generation: &Rc<Cell<u64>>,
+    animation_id: u64,
+    start_width: i32,
+    target_width: i32,
+) {
+    if !animations_enabled() || (target_width - start_width).abs() < 1 {
+        shell.set_size_request(target_width, -1);
+        return;
+    }
+    let started = Instant::now();
+    let shell = shell.downgrade();
+    let generation = generation.clone();
+    let _tick = shell.upgrade().map(|widget| {
+        widget.add_tick_callback(move |_, _| {
+            if generation.get() != animation_id {
+                return glib::ControlFlow::Break;
+            }
+            let Some(shell) = shell.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let progress =
+                (started.elapsed().as_secs_f64() / COLUMN_TRANSITION.as_secs_f64()).clamp(0.0, 1.0);
+            let eased = emphasized_deceleration(progress);
+            let width = start_width + ((target_width - start_width) as f64 * eased).round() as i32;
+            shell.set_size_request(width, -1);
+            if progress >= 1.0 {
+                shell.set_size_request(target_width, -1);
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        })
+    });
+}
+
 impl ViewState {
     pub(super) fn clear_column_selections(&self) {
         let active = self.browser.active_depth();
@@ -758,7 +863,7 @@ impl ViewState {
     }
 
     pub(super) fn rebuild_columns_from(self: &Rc<Self>, from_depth: usize) {
-        self.truncate(from_depth);
+        self.truncate_for_replacement(from_depth);
         let snapshots = (from_depth..)
             .map_while(|depth| self.browser.column_snapshot(depth))
             .collect::<Vec<_>>();
@@ -1845,12 +1950,14 @@ impl ViewState {
     }
 
     pub(super) fn reveal_column(self: &Rc<Self>, shell: gtk::Box) {
-        // Trailing columns borrow preview space without displacing the active column.
+        // A stale reveal more than one level past active redirects to active;
+        // the active column's own immediate child is exempt so show_child()'s
+        // preview can still scroll into view.
         let shell = {
             let columns = self.columns.borrow();
             let depth = columns.iter().position(|column| column.shell == shell);
             match (depth, self.browser.active_depth()) {
-                (Some(depth), Some(active)) if depth > active => columns
+                (Some(depth), Some(active)) if depth > active.saturating_add(1) => columns
                     .get(active)
                     .map_or(shell, |column| column.shell.clone()),
                 _ => shell,
@@ -1858,10 +1965,8 @@ impl ViewState {
         };
         let animation_id = self.horizontal_scroll_generation.get().saturating_add(1);
         self.horizontal_scroll_generation.set(animation_id);
-        self.columns_widget.set_margin_end(0);
         let weak = Rc::downgrade(self);
         let measured_shell = shell.downgrade();
-        // Wait for the preview slot to resize before measuring the viewport.
         let laid_out = std::cell::Cell::new(false);
         let _tick = self.scroller.add_tick_callback(move |_, _| {
             let Some(state) = weak.upgrade() else {
@@ -1907,8 +2012,19 @@ impl ViewState {
         });
     }
 
+    /// Closes columns without an exit animation, for when a replacement is
+    /// about to grow into the same slot.
+    pub(super) fn truncate_for_replacement(self: &Rc<Self>, len: usize) {
+        self.truncate_impl(len, false);
+    }
+
+    /// Closes columns with the standard exit animation, for a close with no
+    /// immediate replacement.
     pub(super) fn truncate(self: &Rc<Self>, len: usize) {
-        self.columns_widget.set_margin_end(0);
+        self.truncate_impl(len, true);
+    }
+
+    fn truncate_impl(self: &Rc<Self>, len: usize, animate: bool) {
         cancel_source(&self.pending_peek);
         self.peek_anchor.take();
         self.close_peek_visual();
@@ -1930,17 +2046,20 @@ impl ViewState {
             let Some(column) = self.columns.borrow_mut().pop() else {
                 break;
             };
-            column
-                .animation_generation
-                .set(column.animation_generation.get().saturating_add(1));
+            let animation_id = column.animation_generation.get().saturating_add(1);
+            column.animation_generation.set(animation_id);
             column.query_binding.take();
             column.search_session.cancel();
             column.syncing_selection.set(true);
             column.selection.set_model(None::<&gio::ListModel>);
             column.filtered_model.set_model(None::<&gio::ListModel>);
             detach_collection_view(&column.list);
-            self.columns_widget.remove(&column.shell);
-            self.overlay.remove_overlay(&column.marquee.band());
+            if animate && animations_enabled() {
+                animate_column_exit(self, column, animation_id);
+            } else {
+                self.columns_widget.remove(&column.shell);
+                self.overlay.remove_overlay(&column.marquee.band());
+            }
         }
         let retained = self
             .columns
@@ -1957,5 +2076,8 @@ pub(super) mod drag_scroll;
 mod reveal;
 mod rows;
 mod search;
+
+#[cfg(test)]
+mod tests;
 
 pub(super) use reveal::ColumnSpan;

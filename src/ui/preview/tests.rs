@@ -200,6 +200,8 @@ fn an_explicit_close_blocks_automatic_previews_until_reopened() {
             );
             drawer.close();
 
+            // Columns no longer reserves a preview slot, so the drawer follows
+            // the same open/close/dismiss lifecycle as single-pane modes.
             crate::ui::preferences::PreferenceManager::shared()
                 .set_browser_mode(crate::ui::browser_modes::BrowserMode::Columns);
             let view = crate::ui::browser::BrowserView::new(
@@ -211,12 +213,14 @@ fn an_explicit_close_blocks_automatic_previews_until_reopened() {
             let content = gtk::Paned::new(gtk::Orientation::Horizontal);
             released.attach_split(&split, &content, &view, None);
             assert!(!released.is_enabled());
-            assert!(released.state.reserves_column_space());
             released.state.toggle_panel(None, None);
+            assert!(released.is_enabled());
+            released.state.toggle_panel(None, None);
+            assert!(!released.is_enabled());
             released.handle_browser_event(&browser, &automatic);
             assert!(
                 !released.is_enabled(),
-                "releasing the panel before any preview also blocks mirroring"
+                "closing the panel before any preview also blocks mirroring"
             );
             assert_eq!(provider.0.borrow().len(), 3);
         },

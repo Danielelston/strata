@@ -317,7 +317,7 @@ fn activating_an_open_list_item_closes_its_child_column() {
         events
             .borrow()
             .iter()
-            .any(|event| matches!(event, BrowserEvent::ColumnsTruncated { len: 1 }))
+            .any(|event| matches!(event, BrowserEvent::ColumnsTruncated { len: 1, .. }))
     );
     assert_eq!(browser.active_depth(), Some(0));
 }
@@ -446,7 +446,8 @@ fn keyboard_selection_and_activation_descend_without_the_ui() {
         event,
         BrowserEvent::FocusChanged {
             depth: 0,
-            position: Some(0)
+            position: Some(0),
+            ..
         }
     )));
     assert!(
@@ -464,7 +465,8 @@ fn keyboard_selection_and_activation_descend_without_the_ui() {
         event,
         BrowserEvent::FocusChanged {
             depth: 1,
-            position: Some(0)
+            position: Some(0),
+            ..
         }
     )));
     assert!(!events.borrow().iter().any(|event| matches!(
@@ -519,7 +521,7 @@ fn escape_closes_a_peek_before_clearing_selection_and_closing_the_deepest_column
         events
             .borrow()
             .iter()
-            .any(|event| matches!(event, BrowserEvent::ColumnsTruncated { len: 1 }))
+            .any(|event| matches!(event, BrowserEvent::ColumnsTruncated { len: 1, .. }))
     );
 }
 
@@ -602,7 +604,8 @@ fn previewing_a_file_in_a_parent_column_closes_deeper_columns_before_requesting(
             event,
             BrowserEvent::FocusChanged {
                 depth: 0,
-                position: Some(1)
+                position: Some(1),
+                ..
             }
         )
     });

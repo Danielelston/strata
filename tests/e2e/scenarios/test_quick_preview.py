@@ -193,23 +193,38 @@ def test_columns_keyboard_selection_opens_the_preview(strata, fixture_tree, root
     )
     strata.keyboard.press(PREVIOUS_ENTRY_KEY["Columns"])
     strata.wait_for_selection(["folder"], root)
-    strata.wait(lambda: strata.preview() is None, "the folder to hand the right pane to its child column")
+    strata.wait(
+        lambda: strata.preview_shows("No preview for this selection"),
+        "the focused folder to keep the docked panel showing its placeholder",
+    )
     strata.pane("folder")
     strata.keyboard.press(NEXT_ENTRY_KEY["Columns"])
     strata.wait_for_selection(["data.csv"], root)
     strata.wait(lambda: strata.preview_shows("alpha"), "the preview to resume")
-    strata.wait(lambda: "folder" not in strata.pane_names(), "the child column to yield to the preview")
+    strata.wait(lambda: "folder" not in strata.pane_names(), "the child column to close as the file is selected")
 
 
 @pytest.mark.preferences(browser_mode="columns", single_click_previews=True)
 @pytest.mark.parametrize("dismissal", ["space", "startup-panel"])
 def test_columns_dismissed_preview_ignores_keyboard_mirroring_until_reopened(strata, root, dismissal):
     if dismissal == "startup-panel":
+        # Columns docks the preview like the single-pane modes, so it starts
+        # closed; toggling it on and back off from Appearance dismisses it and
+        # must block the first keyboard mirror just as Space does.
         strata.open_appearance_menu()
         option = strata.wait(
             lambda: strata.window.find(role="toggle button", name="Preview panel"),
             "the session preview toggle",
         )
+        assert not option.has_state("pressed"), "the docked panel starts closed"
+        strata.pointer.click(option)
+        strata.wait_for_menu_closed()
+        strata.open_appearance_menu()
+        option = strata.wait(
+            lambda: strata.window.find(role="toggle button", name="Preview panel"),
+            "the session preview toggle",
+        )
+        assert option.has_state("pressed"), "Appearance opened the docked panel"
         strata.pointer.click(option)
         strata.wait_for_menu_closed()
         strata.keyboard.press("ctrl+l")
@@ -376,8 +391,8 @@ def test_preview_hides_on_a_folder_and_resumes_when_selection_moves(strata, mode
     strata.keyboard.press(PREVIOUS_ENTRY_KEY[mode])
 
     strata.wait_for_selection(["folder"], root)
-    if mode == "Icons":
-        strata.wait(lambda: strata.preview_shows("No preview for this selection"), "the folder's reserved preview space")
+    if mode in ["Icons", "Columns"]:
+        strata.wait(lambda: strata.preview_shows("No preview for this selection"), "the folder's docked placeholder")
     else:
         strata.wait(lambda: strata.preview() is None, "the folder to dismiss the preview")
     strata.keyboard.press(NEXT_ENTRY_KEY[mode])
@@ -684,17 +699,19 @@ def test_sandboxed_office_files_use_the_shared_rendered_preview(strata, filename
 
 
 @pytest.mark.preferences(browser_mode="columns", single_click_previews=False)
-def test_column_preview_fills_free_space_and_remembers_a_dragged_session_width(strata):
-    def adjacent():
-        column = strata.containers()[-1].screen_bounds()
-        preview = strata.preview().screen_bounds()
-        return abs(preview.x - (column.x + column.width)) <= 3
-
+def test_column_preview_uses_the_resting_width_and_remembers_a_dragged_session_width(strata):
     strata.select_entry_with_keyboard("notes.txt")
     strata.keyboard.press("space")
     strata.wait(lambda: strata.preview_shows("the quick brown fox"), "the first preview")
-    strata.wait(adjacent, "the preview to meet the last column")
     initial = strata.preview().screen_bounds().width
+
+    # Columns docks the preview at the single-pane resting width, so a single
+    # column strip leaves empty space between itself and the panel instead of
+    # the panel stretching to meet it.
+    column = strata.containers()[-1].screen_bounds()
+    resting = strata.preview().screen_bounds()
+    assert column.x + column.width < resting.x, "the preview must not fill the free space beside the columns"
+
     strata.keyboard.press("Down")
     strata.wait(lambda: strata.preview_shows("Body text."), "keyboard selection to update the preview")
     strata.keyboard.press("space")
@@ -702,18 +719,18 @@ def test_column_preview_fills_free_space_and_remembers_a_dragged_session_width(s
     strata.select_entry_with_keyboard("inner.txt")
     strata.keyboard.press("space")
     strata.wait(lambda: strata.preview_shows("inner"), "the nested preview")
-    strata.wait(adjacent, "columns to scroll left beside the minimum-width preview")
-    minimum = strata.preview().screen_bounds().width
-    assert minimum < initial
-    assert strata.containers()[0].screen_bounds().x < strata.pane("folder").screen_bounds().x
 
+    # Docking the preview and navigating the columns must not resize the panel.
+    assert abs(strata.preview().screen_bounds().width - initial) <= 2, "the preview width must not track the columns"
+
+    # Dragging the divider overrides the automatic width for the session.
     bounds = strata.preview().screen_bounds()
     start = (bounds.x - 1, bounds.y + bounds.height // 2)
     distance = bounds.width // 5
     strata.pointer.drag_points(start, (start[0] + distance, start[1]))
     strata.wait(
-        lambda: strata.preview().screen_bounds().width < minimum - distance // 2,
-        "the dragged width to override the automatic minimum",
+        lambda: strata.preview().screen_bounds().width < bounds.width - distance // 2,
+        "the dragged width to override the automatic width",
     )
     chosen = strata.preview().screen_bounds().width
     resized = strata.preview().screen_bounds()
@@ -746,22 +763,27 @@ def test_columns_preview_can_reopen_after_closing(strata):
     assert strata.preview() is None, "closing the content must stop automatic previews"
     strata.open_appearance_menu()
     option = strata.wait(lambda: strata.window.find(role="toggle button", name="Preview panel"), "the preview toggle")
-    assert option.has_state("pressed"), "closing a preview must keep its space reserved"
+    assert not option.has_state("pressed"), "a closed preview leaves the panel toggle off"
     strata.dismiss_menu()
     strata.select_entry("inner.txt")
     strata.keyboard.press("space")
     strata.wait(lambda: strata.preview_shows("inner"), "the preview to reopen")
-    strata.keyboard.press("space")
-    strata.wait(lambda: strata.preview() is None, "Space to dismiss the preview content")
     strata.open_appearance_menu()
-    option = strata.wait(lambda: strata.window.find(role="toggle button", name="Preview panel"), "the retained preview toggle")
-    assert option.has_state("pressed")
+    option = strata.wait(lambda: strata.window.find(role="toggle button", name="Preview panel"), "the open preview toggle")
+    assert option.has_state("pressed"), "an open preview keeps the panel toggle on"
+    # Appearance explicitly releases the preview reservation: turning the panel
+    # off from the menu closes it and blocks automatic previews until reopened.
     strata.pointer.click(option)
     strata.wait_for_menu_closed()
+    strata.wait(lambda: strata.preview() is None, "Appearance to release the preview panel")
     strata.open_appearance_menu()
-    option = strata.wait(lambda: strata.window.find(role="toggle button", name="Preview panel"), "the disabled preview toggle")
+    option = strata.wait(lambda: strata.window.find(role="toggle button", name="Preview panel"), "the released preview toggle")
     assert not option.has_state("pressed"), "Appearance explicitly releases the preview reservation"
     strata.dismiss_menu()
+    strata.select_entry("nested-notes.txt")
+    assert strata.preview() is None, "releasing the panel must stop automatic previews"
+    strata.keyboard.press("space")
+    strata.wait(lambda: strata.preview_shows("nested preview fixture"), "Space to reopen the released preview")
 
 
 @pytest.mark.preferences(browser_mode="columns", single_click_previews=False)

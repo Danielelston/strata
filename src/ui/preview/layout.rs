@@ -4,14 +4,13 @@ use std::rc::Weak;
 
 use super::*;
 use crate::ui::{
-    browser::{BrowserView, COLUMN_WIDTH, WeakBrowserView},
+    browser::{BrowserView, COLUMN_WIDTH, WeakBrowserView, single_pane_preview_reservation},
     browser_modes::BrowserMode,
     window::{
         MIN_SIDEBAR_WIDTH, SidebarState, SidebarView, preferred_sidebar_width, sidebar_rail_width,
     },
 };
 
-const MIN_COLUMN_MULTIPLIER: i32 = 2;
 const MIN_SPLIT_PREVIEW_WIDTH: i32 = 240;
 const RAIL_RELEASE_MARGIN: i32 = 24;
 
@@ -70,11 +69,9 @@ struct BrowserBinding {
 struct Geometry {
     available: i32,
     occupied: i32,
-    trailing: i32,
     start_minimum: i32,
     show_minimum: i32,
     separator: i32,
-    columns: bool,
 }
 
 impl Geometry {
@@ -87,25 +84,14 @@ impl Geometry {
     }
 
     fn minimum_width(self, manual: bool) -> i32 {
-        let minimum = if manual {
-            COLUMN_WIDTH
-        } else if self.columns {
-            COLUMN_WIDTH * MIN_COLUMN_MULTIPLIER
-        } else {
-            MIN_WIDTH
-        };
+        let minimum = if manual { COLUMN_WIDTH } else { MIN_WIDTH };
         minimum.min(self.maximum_width())
     }
 
     fn desired_width(self, manual: Option<i32>) -> i32 {
         let free = (self.available - self.separator - self.occupied).max(0);
-        let desired = manual.unwrap_or_else(|| {
-            if self.columns {
-                free
-            } else {
-                free.saturating_mul(9).saturating_div(10).min(MAX_WIDTH)
-            }
-        });
+        let desired =
+            manual.unwrap_or_else(|| free.saturating_mul(9).saturating_div(10).min(MAX_WIDTH));
         desired.clamp(self.minimum_width(manual.is_some()), self.maximum_width())
     }
 
@@ -115,18 +101,6 @@ impl Geometry {
 
     fn position(self, manual: Option<i32>) -> i32 {
         self.available - self.separator - self.preview_width(manual)
-    }
-
-    fn empty_slot_minimum(self, manual: bool) -> i32 {
-        (self.minimum_width(manual) - self.trailing).max(0)
-    }
-
-    fn empty_slot_width(self, manual: Option<i32>) -> i32 {
-        (self.desired_width(manual) - self.trailing).max(0)
-    }
-
-    fn empty_slot_position(self, manual: Option<i32>) -> i32 {
-        self.available - self.separator - self.empty_slot_width(manual)
     }
 }
 
@@ -173,12 +147,12 @@ impl PreviewDrawer {
             sidebar: sidebar.map(|sidebar| Rc::downgrade(&sidebar.state)),
         }));
         self.state.refresh_panel_action();
-        browser.bind_preview_scrolling(&self.state.revealer);
+        browser.bind_preview_scrolling();
         let weak = Rc::downgrade(&self.state);
         browser.connect_view_mode_changed(move |_| {
             if let Some(state) = weak.upgrade() {
                 state.refresh_panel_action();
-                if !state.is_enabled() && !state.reserves_column_space() {
+                if !state.is_enabled() {
                     state.hide_panel();
                     state.release_sidebar_rail();
                 }
@@ -219,15 +193,13 @@ impl PreviewDrawer {
         }));
         split.set_end_child(Some(&self.state.slot));
         self.state.revealer.set_visible(self.state.is_enabled());
-        self.state
-            .slot
-            .set_visible(self.state.is_enabled() || self.state.reserves_column_space());
+        self.state.slot.set_visible(self.state.is_enabled());
         let weak = Rc::downgrade(&self.state);
         split.add_tick_callback(move |split, _| {
             let Some(state) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
-            if state.is_enabled() || state.reserves_column_space() {
+            if state.is_enabled() {
                 state.sync_split(split);
             }
             glib::ControlFlow::Continue
@@ -273,13 +245,8 @@ impl PreviewState {
         )
     }
 
-    pub(super) fn slot_is_empty(&self) -> bool {
-        self.current.borrow().is_none() && !self.reserves_empty_preview()
-    }
-
     pub(super) fn reserves_empty_preview(&self) -> bool {
         self.is_enabled()
-            && !self.child_pane.get()
             && self
                 .sizing
                 .binding
@@ -294,44 +261,23 @@ impl PreviewState {
                 })
     }
 
-    pub(super) fn browsing_columns(&self) -> bool {
-        self.sizing
-            .browser()
-            .is_some_and(|browser| browser.view_mode() == BrowserMode::Columns)
-    }
-
-    pub(super) fn reserves_column_space(&self) -> bool {
-        self.reserve_columns.get() && self.browsing_columns()
-    }
-
     fn geometry(&self, split: &gtk::Paned) -> Geometry {
         let available = split.width();
         let mut geometry = Geometry {
             available,
             occupied: available.saturating_sub(DEFAULT_WIDTH),
-            trailing: 0,
             start_minimum: 0,
             show_minimum: 0,
             separator: separator_width(split),
-            columns: false,
         };
         if let Some(binding) = self.sizing.binding.borrow().as_ref()
             && let Some(content) = binding.content.upgrade()
-            && let Some(browser) = binding.browser.upgrade()
         {
             let sidebar = self.intended_sidebar_width(binding, &content);
-            geometry.columns = browser.view_mode() == BrowserMode::Columns;
             geometry.occupied =
-                sidebar + browser.preview_navigated_width((available - sidebar).max(0));
-            if geometry.columns {
-                geometry.trailing = browser.preview_trailing_width();
-                geometry.start_minimum = sidebar.saturating_add(browser.preview_navigation_width());
-                geometry.show_minimum =
-                    sidebar.saturating_add(browser.preview_standard_navigation_width());
-            } else {
-                geometry.start_minimum = sidebar.saturating_add(COLUMN_WIDTH);
-                geometry.show_minimum = geometry.start_minimum;
-            }
+                sidebar + single_pane_preview_reservation((available - sidebar).max(0));
+            geometry.start_minimum = sidebar.saturating_add(COLUMN_WIDTH);
+            geometry.show_minimum = geometry.start_minimum;
         }
         geometry
     }
@@ -372,21 +318,9 @@ impl PreviewState {
         split.is_mapped() && self.geometry(split).can_show_preview()
     }
 
-    fn preserve_column_positions(&self, content_width: i32) {
-        if let Some(binding) = self.sizing.binding.borrow().as_ref()
-            && let Some(content) = binding.content.upgrade()
-            && let Some(browser) = binding.browser.upgrade()
-        {
-            browser.preserve_columns_for_viewport((content_width - sidebar_width(&content)).max(0));
-        }
-    }
-
     pub(super) fn show_panel(&self) {
-        if let Some(binding) = self.sizing.binding.borrow().as_ref()
-            && let Some(browser) = binding.browser.upgrade()
-        {
-            browser.clear_preview_scroll_space();
-        }
+        // The revealer is only a visibility latch now: `animate_reveal` slides
+        // the split itself, so the revealer toggles instantly.
         self.revealer.set_transition_duration(0);
         self.pane.set_width_request(0);
         self.slot.set_visible(true);
@@ -436,30 +370,51 @@ impl PreviewState {
     }
 
     pub(super) fn hide_panel(&self) {
-        let restore_browser_focus =
-            self.pane
-                .root()
-                .and_then(|root| root.focus())
-                .is_some_and(|focused| {
-                    focused == self.pane
+        let restore_browser_focus = self.begin_hide();
+        self.finish_hide(restore_browser_focus);
+    }
+
+    /// Pins the pane to its resting width while the split sweeps, so the panel
+    /// is laid out once at its final size and merely clipped by the divider —
+    /// it slides as a whole instead of reflowing or revealing instantly.
+    fn pin_pane_width(&self, split: &gtk::Paned) {
+        self.pane.set_width_request(
+            self.geometry(split)
+                .preview_width(self.sizing.manual_width.get()),
+        );
+    }
+
+    /// Whether the browser view needs focus restored once the panel is gone.
+    fn hide_intent(&self) -> bool {
+        self.pane
+            .root()
+            .and_then(|root| root.focus())
+            .is_some_and(|focused| {
+                focused == self.pane
                     || focused.is_ancestor(&self.pane)
                     // GTK may focus a divider while allocating a smaller split.
                     || self.split.borrow().as_ref().is_some_and(|split| split.has_focus())
                     || self.sizing.binding.borrow().as_ref().is_some_and(|binding| {
                         binding.content.upgrade().is_some_and(|content| content.has_focus())
                     })
-                });
-        let keep_slot = self.reserves_column_space();
-        if let Some(split) = self.split.borrow().as_ref()
-            && self.revealer.is_visible()
-            && !keep_slot
-        {
-            self.preserve_column_positions(split.width());
-        }
+            })
+    }
+
+    /// Collapses the revealer instantly without tearing down slot/split state
+    /// yet; `hide_panel` follows with `finish_hide`, while the animated close
+    /// (`animate_reveal`) keeps the pane revealed and lets the divider sweep
+    /// carry it out before `finish_hide` retires the slot.
+    fn begin_hide(&self) -> bool {
+        let restore_browser_focus = self.hide_intent();
         self.revealer.set_transition_duration(0);
         self.revealer.set_reveal_child(false);
+        restore_browser_focus
+    }
+
+    fn finish_hide(&self, restore_browser_focus: bool) {
+        self.revealer.set_reveal_child(false);
         self.revealer.set_visible(false);
-        if !keep_slot && let Some(split) = self.split.borrow().as_ref() {
+        if let Some(split) = self.split.borrow().as_ref() {
             self.slot.set_visible(false);
             split.set_resize_start_child(true);
             split.set_resize_end_child(false);
@@ -501,9 +456,7 @@ impl PreviewState {
 
     pub(super) fn sync_split(self: &Rc<Self>, split: &gtk::Paned) {
         let mut geometry = self.geometry(split);
-        let reserved = self.reserves_column_space();
-        let preview_present =
-            self.current.borrow().is_some() || self.reserves_empty_preview() || reserved;
+        let preview_present = self.current.borrow().is_some() || self.reserves_empty_preview();
         if preview_present
             && let Some(binding) = self.sizing.binding.borrow().as_ref()
             && let Some(content) = binding.content.upgrade()
@@ -538,15 +491,7 @@ impl PreviewState {
                 .browser
                 .upgrade()
                 .is_some_and(|browser| browser.is_resizing_columns());
-            let occupied = if let Some(browser) = binding.browser.upgrade() {
-                if geometry.columns {
-                    browser.preview_standard_navigation_width()
-                } else {
-                    COLUMN_WIDTH
-                }
-            } else {
-                COLUMN_WIDTH
-            };
+            let occupied = COLUMN_WIDTH;
             // A previously clamped manual width must not defeat the preview minimum.
             let preview_needed = self
                 .sizing
@@ -620,34 +565,6 @@ impl PreviewState {
                 geometry = self.geometry(split);
             }
         }
-        // Keep the slot even below the content threshold to prevent scroll clamping.
-        let bare = reserved
-            && (self.slot_is_empty() || !split.is_mapped() || !geometry.can_show_preview());
-        if bare {
-            if self.sizing.resizing.get() {
-                return;
-            }
-            if self.current.borrow().is_some() {
-                self.suspend_panel();
-            } else if self.revealer.reveals_child() {
-                self.hide_panel();
-            }
-            let manual = self.sizing.manual_width.get();
-            self.slot.set_visible(true);
-            let position = geometry.empty_slot_position(manual);
-            let slot_fills_free_space =
-                manual.is_none() && position == geometry.occupied.saturating_add(geometry.trailing);
-            // A stale minimum would over-allocate the slot for one shrinking frame.
-            self.slot.set_width_request(if slot_fills_free_space {
-                0
-            } else {
-                geometry.empty_slot_minimum(manual.is_some())
-            });
-            split.set_resize_start_child(!slot_fills_free_space);
-            split.set_resize_end_child(slot_fills_free_space);
-            split.set_position(position);
-            return;
-        }
         self.slot.set_width_request(0);
         if self.current.borrow().is_none() {
             let reserves_empty_preview = self.reserves_empty_preview();
@@ -670,31 +587,18 @@ impl PreviewState {
         if self.animating.get() || self.sizing.resizing.get() {
             return;
         }
-        // GTK allocates after this tick; free-space previews must absorb window
-        // growth instead of correcting the browser's divider on the next frame.
         let manual = self.sizing.manual_width.get();
         let position = geometry.position(manual);
-        let preview_fills_free_space =
-            geometry.columns && manual.is_none() && position == geometry.occupied;
-        split.set_resize_start_child(!preview_fills_free_space);
-        split.set_resize_end_child(preview_fills_free_space);
+        split.set_resize_start_child(true);
+        split.set_resize_end_child(false);
         let restored = self.sizing.suspended.replace(false);
         if restored || !self.revealer.reveals_child() {
             self.show_panel();
         }
-        let minimum = if preview_fills_free_space {
-            0
-        } else {
-            geometry.minimum_width(manual.is_some())
-        };
+        let minimum = geometry.minimum_width(manual.is_some());
         if self.pane.width_request() != minimum || split.position() != position {
             self.pane.set_width_request(minimum);
             split.set_position(position);
-        }
-        if let Some(binding) = self.sizing.binding.borrow().as_ref()
-            && let Some(browser) = binding.browser.upgrade()
-        {
-            browser.clear_preview_scroll_space();
         }
         if self.sizing.reload_on_resume.replace(false) {
             let entry = self.current.borrow().clone();
@@ -722,56 +626,109 @@ impl PreviewState {
             })
     }
 
-    pub(super) fn animate_open(self: &Rc<Self>, split: &gtk::Paned) {
+    /// Slides the preview panel in or out like a drawer: the `Paned` divider
+    /// sweeps between the tucked-away and resting positions while the pane is
+    /// pinned to its resting width and clipped by the slot, so the whole
+    /// panel — background, header and content — glides as one unit instead of
+    /// revealing instantly or reflowing mid-animation.
+    ///
+    /// `on_settled` runs exactly once, either synchronously (reduced motion,
+    /// the divider is already at rest, or the slot can't show a preview at
+    /// all) or once the sweep completes. Callers hang any state change that
+    /// depends on the panel actually being open or closed off it (e.g.
+    /// `close()`'s logical teardown must not run until the panel has visually
+    /// closed).
+    pub(super) fn animate_reveal(
+        self: &Rc<Self>,
+        split: &gtk::Paned,
+        expanded: bool,
+        on_settled: impl FnOnce(&Rc<Self>) + 'static,
+    ) {
         self.sync_split(split);
-        if self.reserves_column_space() {
-            return;
-        }
         let geometry = self.geometry(split);
-        if !geometry.can_show_preview() {
+        if expanded && !geometry.can_show_preview() {
+            on_settled(self);
             return;
         }
-        let target = geometry.position(self.sizing.manual_width.get());
-        let start = split.width();
-        // The animation owns the divider, including after a resize while the pane was hidden.
-        split.set_resize_start_child(false);
-        split.set_resize_end_child(true);
-        self.preserve_column_positions(start);
-        split.set_position(start);
+
         let animation_id = self.animation_generation.get().saturating_add(1);
         self.animation_generation.set(animation_id);
-        self.animating.set(true);
 
-        if !super::super::motion::animations_enabled() || start <= 0 {
+        let target = if expanded {
+            geometry.position(self.sizing.manual_width.get())
+        } else {
+            split.width()
+        };
+        // Opening always sweeps in from the panel fully tucked away so the
+        // whole thing animates; closing sweeps out from wherever it rests.
+        // The divider is the only thing that moves — the pane keeps its
+        // resting width and is clipped, so nothing reflows.
+        let (start, restore_browser_focus) = if expanded {
+            split.set_resize_start_child(false);
+            split.set_resize_end_child(true);
+            self.show_panel();
+            self.pin_pane_width(split);
+            let start = split.width();
+            split.set_position(start);
+            (start, false)
+        } else {
+            self.pin_pane_width(split);
+            (split.position(), self.hide_intent())
+        };
+
+        if !super::super::motion::animations_enabled() || start == target {
+            split.set_position(target);
             self.animating.set(false);
-            self.sync_split(split);
+            self.pane.set_width_request(0);
+            if expanded {
+                self.sync_split(split);
+            } else {
+                self.finish_hide(restore_browser_focus);
+            }
+            on_settled(self);
             return;
         }
 
+        self.animating.set(true);
         let started = Instant::now();
+        let duration = TRANSITION;
         let weak = Rc::downgrade(self);
-        split.add_tick_callback(move |split, _| {
+        let split = split.clone();
+        let on_settled = RefCell::new(Some(on_settled));
+        let _tick = split.clone().add_tick_callback(move |split, _| {
             let Some(state) = weak.upgrade() else {
                 return glib::ControlFlow::Break;
             };
             if state.animation_generation.get() != animation_id {
                 return glib::ControlFlow::Break;
             }
-            let progress =
-                (started.elapsed().as_secs_f64() / TRANSITION.as_secs_f64()).clamp(0.0, 1.0);
-            let eased = super::super::motion::emphasized_deceleration(progress);
-            let position = f64::from(start) + f64::from(target - start) * eased;
-            let position = position.round() as i32;
-            // Shrink the scroll range with the viewport, without clamping its retained offset.
-            state.preserve_column_positions(position);
-            split.set_position(position);
-            if progress >= 1.0 {
-                state.animating.set(false);
-                state.sync_split(split);
-                glib::ControlFlow::Break
+            let target = if expanded {
+                state
+                    .geometry(split)
+                    .position(state.sizing.manual_width.get())
             } else {
-                glib::ControlFlow::Continue
+                split.width()
+            };
+            let progress =
+                (started.elapsed().as_secs_f64() / duration.as_secs_f64()).clamp(0.0, 1.0);
+            let eased = super::super::motion::emphasized_deceleration(progress);
+            let position = (f64::from(start) + f64::from(target - start) * eased).round() as i32;
+            split.set_position(position);
+            state.pin_pane_width(split);
+            if progress < 1.0 {
+                return glib::ControlFlow::Continue;
             }
+            state.animating.set(false);
+            split.set_position(target);
+            if expanded {
+                state.sync_split(split);
+            } else {
+                state.finish_hide(restore_browser_focus);
+            }
+            if let Some(callback) = on_settled.borrow_mut().take() {
+                callback(&state);
+            }
+            glib::ControlFlow::Break
         });
     }
 
@@ -780,12 +737,7 @@ impl PreviewState {
         if !geometry.can_show_preview() {
             return;
         }
-        let lent = if self.slot_is_empty() {
-            geometry.trailing
-        } else {
-            0
-        };
-        let width = (geometry.available - geometry.separator - position + lent)
+        let width = (geometry.available - geometry.separator - position)
             .clamp(geometry.minimum_width(true), geometry.maximum_width());
         self.sizing.manual_width.set(Some(width));
         self.sync_split(split);
@@ -810,7 +762,7 @@ fn install_resize(split: &gtk::Paned, state: &Rc<PreviewState>) {
                     || event
                         .downcast_ref::<gtk::gdk::ButtonEvent>()
                         .is_some_and(|e| e.button() == 1))
-                    && (state.is_enabled() || state.reserves_column_space())
+                    && state.is_enabled()
                     && !state.sizing.is_suspended()
                     && on_separator(&split, event) =>
             {
@@ -837,7 +789,7 @@ fn install_resize(split: &gtk::Paned, state: &Rc<PreviewState>) {
     let weak = Rc::downgrade(state);
     split.connect_position_notify(move |split| {
         if let Some(state) = weak.upgrade()
-            && (state.is_enabled() || state.reserves_column_space())
+            && state.is_enabled()
             && state.sizing.resizing.replace(false)
         {
             state.resize_preview(split, split.position());
@@ -850,7 +802,7 @@ fn install_resize(split: &gtk::Paned, state: &Rc<PreviewState>) {
     split.connect_move_handle(move |split, _| {
         if split.has_focus() {
             if let Some(state) = weak.upgrade()
-                && (state.is_enabled() || state.reserves_column_space())
+                && state.is_enabled()
                 && !state.sizing.is_suspended()
             {
                 let minimum = state.geometry(split).minimum_width(true);
@@ -893,9 +845,10 @@ fn on_separator(split: &gtk::Paned, event: &gtk::gdk::Event) -> bool {
 }
 
 fn remember_keyboard_width(weak: std::rc::Weak<PreviewState>) {
-    let Some(state) = weak.upgrade().filter(|state| {
-        (state.is_enabled() || state.reserves_column_space()) && !state.sizing.is_suspended()
-    }) else {
+    let Some(state) = weak
+        .upgrade()
+        .filter(|state| state.is_enabled() && !state.sizing.is_suspended())
+    else {
         return;
     };
     let Some(split) = state.split.borrow().clone() else {
@@ -907,7 +860,7 @@ fn remember_keyboard_width(weak: std::rc::Weak<PreviewState>) {
     glib::idle_add_local_once(move || {
         if let Some(state) = weak.upgrade() {
             state.sizing.resizing.set(false);
-            if (state.is_enabled() || state.reserves_column_space()) && split.position() != before {
+            if state.is_enabled() && split.position() != before {
                 state.resize_preview(&split, split.position());
             }
         }

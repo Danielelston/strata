@@ -216,6 +216,7 @@ impl Browser {
             self.emit(BrowserEvent::FocusChanged {
                 depth,
                 position: publication.focused,
+                triggered_by_removal: false,
             });
         }
     }

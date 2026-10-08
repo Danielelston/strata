@@ -1067,7 +1067,9 @@ impl BrowserView {
                 .restore_active_filter(&filter);
         }
         match previous {
-            BrowserMode::Columns => self.state.truncate(0),
+            // The columns view is already hidden, so an exit animation here
+            // would never be seen.
+            BrowserMode::Columns => self.state.truncate_for_replacement(0),
             BrowserMode::Icons | BrowserMode::List => self
                 .state
                 .mode_views
@@ -1790,7 +1792,8 @@ impl BrowserView {
         } else {
             self.state.browser.select(depth, position);
         }
-        self.state.mirror_focused_folder(depth, Some(position));
+        self.state
+            .mirror_focused_folder(depth, Some(position), false);
         if let (Some(direction), Some((view, scroll))) = (key, collection) {
             let position = self.cursor_view_position(&view);
             super::scrolling::reveal_cursor(
@@ -2243,7 +2246,8 @@ impl BrowserView {
         if let Some((depth, position)) = cursor()
             && Some((depth, position)) != before
         {
-            self.state.mirror_focused_folder(depth, Some(position));
+            self.state
+                .mirror_focused_folder(depth, Some(position), false);
         }
         if let Some((view, scroll)) = collection {
             let position = self.cursor_view_position(&view);
@@ -2736,7 +2740,7 @@ fn new_folder_destination_depth(
         .or_else(|| pane_count.checked_sub(1))
 }
 
-fn single_pane_preview_reservation(width: i32) -> i32 {
+pub(in crate::ui) fn single_pane_preview_reservation(width: i32) -> i32 {
     width.max(0) / 2
 }
 
