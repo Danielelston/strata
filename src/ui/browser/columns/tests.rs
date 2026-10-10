@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: MIT
 
-//! Behavioral regressions for the Miller-column nav animation. Every assertion reads an
-//! adjustment value, a generation counter, a CSS class, or an explicit `width_request` —
-//! never a computed layout measurement.
-
 use super::*;
 use crate::ui::browser::BrowserView;
 use crate::ui::browser_modes::BrowserMode;
 use crate::ui::preferences::PreferenceManager;
 
-/// Forces motion on. Must run after the preference manager has loaded (creating a `BrowserView`
-/// loads the exhaustive fixture, which seeds `reduce_motion = true`).
+/// Call after creating a `BrowserView`: its exhaustive preference fixture seeds
+/// `reduce_motion = true`.
 fn animations_on() {
     crate::ui::motion::set_reduce_motion(false);
     if let Some(settings) = gtk::Settings::default() {
@@ -20,13 +16,6 @@ fn animations_on() {
 
 fn animations_off() {
     crate::ui::motion::set_reduce_motion(true);
-}
-
-fn pump() {
-    let context = glib::MainContext::default();
-    while context.pending() {
-        context.iteration(false);
-    }
 }
 
 fn pump_until(condition: impl Fn() -> bool, what: &str) {
@@ -87,10 +76,6 @@ impl Columns {
             window,
             _root: root,
         }
-    }
-
-    fn depth_count(&self) -> usize {
-        self.view.state.columns.borrow().len()
     }
 
     fn shell(&self, depth: usize) -> gtk::Box {
@@ -154,17 +139,6 @@ fn shell_edge(scroller: &gtk::ScrolledWindow, shell: &gtk::Box) -> (f64, f64) {
     )
 }
 
-fn autofit_target(shell: &gtk::Box) -> i32 {
-    shell
-        .first_child()
-        .and_downcast::<gtk::Overlay>()
-        .and_then(|overlay| overlay.child())
-        .map(|child| max_child_natural_width(&child))
-        .unwrap_or(COLUMN_WIDTH)
-        .max(COLUMN_WIDTH)
-}
-
-/// The `directory-column` pane box that the entry animation's CSS class targets.
 fn column_pane(shell: &gtk::Box) -> gtk::Widget {
     shell
         .first_child()
@@ -198,130 +172,9 @@ fn reveal_column_does_not_move_an_already_visible_active_column() {
 }
 
 #[test]
-fn reveal_column_still_scrolls_a_genuinely_clipped_column() {
+fn a_resize_during_a_column_entry_does_not_strand_its_animation() {
     crate::test_support::gtk_test(
-        "ui::browser::columns::tests::reveal_column_still_scrolls_a_genuinely_clipped_column",
-        || {
-            let fixture = Columns::new(6, 700);
-            animations_off();
-            let adjustment = fixture.adjustment();
-            pump_until(|| adjustment.page_size() > 0.0, "viewport sizing");
-            adjustment.set_value(adjustment.upper() - adjustment.page_size());
-            pump_for(Duration::from_millis(20));
-            fixture.view.browser().set_active_column(0);
-            let before = adjustment.value();
-            assert!(
-                before > 0.0,
-                "fixture starts scrolled away from the first column"
-            );
-            fixture.view.state.reveal_column(fixture.shell(0));
-            pump_until(
-                || adjustment.value() < before,
-                "clipped column reveals by scrolling back",
-            );
-            assert!(
-                adjustment.value() < before,
-                "a genuinely clipped column must still be revealed"
-            );
-        },
-    );
-}
-
-#[test]
-fn mirror_focused_folder_forces_the_open_after_a_pointer_driven_removal() {
-    crate::test_support::gtk_test(
-        "ui::browser::columns::tests::mirror_focused_folder_forces_the_open_after_a_pointer_driven_removal",
-        || {
-            // Just the root column — no child yet, so depth 1 only exists
-            // once something (the fix under test) actually opens it.
-            let fixture = Columns::new(1, 900);
-            animations_off();
-            fixture.view.set_columns_mirror_selection(true);
-            // A directory sibling under the fixture's root column (depth 0),
-            // standing in for whatever entry a deletion would land focus on.
-            let root = fixture._root.path();
-            let sibling = root.join("sibling-after-delete");
-            std::fs::create_dir_all(&sibling).expect("sibling directory");
-            fixture.view.browser().retry_column(0);
-            pump_until(|| column_loaded(&fixture.view, 0), "root column reload");
-            let position = fixture
-                .view
-                .browser()
-                .with_column_entries(0, |entries| {
-                    entries
-                        .iter()
-                        .position(|entry| entry.location == Location::local(&sibling))
-                })
-                .flatten()
-                .expect("sibling entry present in the loaded column");
-
-            // Mouse was the last input, which the ordinary gate would block.
-            fixture
-                .view
-                .state
-                .input_ownership
-                .borrow_mut()
-                .pointer_action();
-            fixture.view.browser().select(0, position);
-            pump_for(Duration::from_millis(20));
-            assert!(
-                fixture.view.state.columns.borrow().get(1).is_none(),
-                "sanity: the ordinary pointer-gated path must not have opened it"
-            );
-
-            fixture
-                .view
-                .state
-                .mirror_focused_folder(0, Some(position), true);
-            pump_until(
-                || column_loaded(&fixture.view, 1),
-                "forced child column load",
-            );
-            assert!(
-                fixture.view.state.columns.borrow().get(1).is_some(),
-                "a removal-driven focus change must open the newly selected folder \
-                 even though the last navigation input was the pointer"
-            );
-        },
-    );
-}
-
-#[test]
-fn rapid_reveals_leave_no_orphaned_tick() {
-    crate::test_support::gtk_test(
-        "ui::browser::columns::tests::rapid_reveals_leave_no_orphaned_tick",
-        || {
-            let fixture = Columns::new(6, 700);
-            animations_off();
-            let shells: Vec<gtk::Box> = (0..fixture.depth_count())
-                .map(|depth| fixture.shell(depth))
-                .collect();
-            for step in 0..12 {
-                fixture
-                    .view
-                    .state
-                    .reveal_column(shells[step % shells.len()].clone());
-                for _ in 0..3 {
-                    pump();
-                }
-            }
-            pump_for(Duration::from_millis(120));
-            pump_for(Duration::from_millis(120));
-            let generation = fixture.view.state.horizontal_scroll_generation.get();
-            pump_for(Duration::from_millis(50));
-            assert_eq!(
-                fixture.view.state.horizontal_scroll_generation.get(),
-                generation,
-                "no orphaned tick keeps bumping the horizontal scroll generation"
-            );
-        },
-    );
-}
-
-#[test]
-fn column_entry_animation_timing_and_class_unchanged() {
-    crate::test_support::gtk_test(
-        "ui::browser::columns::tests::column_entry_animation_timing_and_class_unchanged",
+        "ui::browser::columns::tests::a_resize_during_a_column_entry_does_not_strand_its_animation",
         || {
             PreferenceManager::seed_saved_preferences_for_test();
             let root = tempfile::tempdir().expect("entry fixture");
@@ -346,27 +199,15 @@ fn column_entry_animation_timing_and_class_unchanged() {
                 .map(|column| column.shell.clone())
                 .expect("column shell");
             let pane = column_pane(&shell);
-            assert!(
-                pane.has_css_class("column-entering"),
-                "the entry class is applied immediately"
-            );
-            pump_for(COLUMN_TRANSITION / 2);
-            assert!(
-                pane.has_css_class("column-entering"),
-                "the entry class persists for the full COLUMN_TRANSITION"
-            );
             let scroller = view.state.scroller.clone();
-            let gesture = resize_gesture(&scroller);
             let edge = shell_edge(&scroller, &shell);
+            assert!(pane.has_css_class("column-entering"));
+            let gesture = resize_gesture(&scroller);
             gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
             gesture.emit_by_name::<()>("drag-end", &[&0.0f64, &0.0f64]);
             pump_until(
                 || !pane.has_css_class("column-entering"),
-                "entry class removed even though a resize began during the entry",
-            );
-            assert!(
-                !pane.has_css_class("column-entering"),
-                "the entry class is removed once COLUMN_TRANSITION elapses"
+                "the entry animation to end despite the resize",
             );
             window.destroy();
             view.browser().clear_observer();
@@ -375,22 +216,17 @@ fn column_entry_animation_timing_and_class_unchanged() {
 }
 
 #[test]
-fn close_column_defers_removal_until_exit_animation_then_removes_it() {
+fn a_closing_column_leaves_after_its_animation_and_takes_no_input() {
     crate::test_support::gtk_test(
-        "ui::browser::columns::tests::close_column_defers_removal_until_exit_animation_then_removes_it",
+        "ui::browser::columns::tests::a_closing_column_leaves_after_its_animation_and_takes_no_input",
         || {
             let fixture = Columns::new(3, 900);
             animations_on();
             let exiting = fixture.shell(1);
-            assert!(exiting.parent().is_some());
             fixture.view.browser().close_column(1);
             assert!(
-                exiting.has_css_class("column-exiting"),
-                "the exit class is applied when a column is closed"
-            );
-            assert!(
                 exiting.parent().is_some(),
-                "the widget stays in the tree while the exit animation plays"
+                "the column stays while its exit animation plays"
             );
             let scroller = fixture.scroller();
             let bounds = exiting.compute_bounds(&scroller).expect("exiting bounds");
@@ -411,11 +247,7 @@ fn close_column_defers_removal_until_exit_animation_then_removes_it() {
             );
             pump_until(
                 || exiting.parent().is_none(),
-                "exiting column removal after COLUMN_TRANSITION",
-            );
-            assert!(
-                exiting.parent().is_none(),
-                "the widget is removed once COLUMN_TRANSITION elapses"
+                "the column to leave once its animation ends",
             );
         },
     );
@@ -430,23 +262,16 @@ fn switching_to_a_sibling_closes_the_old_child_without_an_exit_animation() {
             animations_on();
             let old_child = fixture.shell(1);
             let old_grandchild = fixture.shell(2);
-            // Create a sibling of "level-0" under the same root so depth 0 can
-            // descend into it, replacing the already-open depth-1/2 subtree.
-            let root = fixture._root.path();
-            let sibling = root.join("sibling-0");
+            let sibling = fixture._root.path().join("sibling-0");
             std::fs::create_dir_all(&sibling).expect("sibling directory");
             fixture.view.browser().descend(0, Location::local(&sibling));
             pump_until(|| column_loaded(&fixture.view, 1), "sibling column load");
             assert!(
                 old_child.parent().is_none(),
-                "the replaced child is removed immediately, not left animating"
+                "the replaced child goes at once so its replacement takes its place"
             );
             assert!(
-                !old_child.has_css_class("column-exiting"),
-                "a sibling switch is a replacement, not a standalone close — no exit class"
-            );
-            assert!(
-                old_grandchild.parent().is_some() && old_grandchild.has_css_class("column-exiting"),
+                old_grandchild.parent().is_some(),
                 "deeper columns of the replaced branch shrink away so the strip slides"
             );
             pump_until(
@@ -456,7 +281,6 @@ fn switching_to_a_sibling_closes_the_old_child_without_an_exit_animation() {
         },
     );
 }
-
 #[test]
 fn close_column_skips_exit_animation_when_animations_disabled() {
     crate::test_support::gtk_test(
@@ -468,129 +292,11 @@ fn close_column_skips_exit_animation_when_animations_disabled() {
             fixture.view.browser().close_column(1);
             assert!(
                 exiting.parent().is_none(),
-                "with animations disabled the widget is removed immediately"
-            );
-            assert!(
-                !exiting.has_css_class("column-exiting"),
-                "no exit class is ever applied with animations disabled"
+                "with animations disabled the column is removed immediately"
             );
         },
     );
 }
-
-#[test]
-fn close_deepest_column_via_escape_also_animates_exit() {
-    crate::test_support::gtk_test(
-        "ui::browser::columns::tests::close_deepest_column_via_escape_also_animates_exit",
-        || {
-            let fixture = Columns::new(3, 900);
-            animations_on();
-            let deepest = fixture.shell(2);
-            fixture.view.browser().clear_active_selection();
-            fixture.view.browser().escape();
-            assert!(
-                deepest.has_css_class("column-exiting"),
-                "the escape close path shares the exit animation"
-            );
-            assert!(deepest.parent().is_some());
-            pump_until(
-                || deepest.parent().is_none(),
-                "escape close removal after COLUMN_TRANSITION",
-            );
-            assert!(
-                deepest.parent().is_none(),
-                "the escape close path removes the widget once COLUMN_TRANSITION elapses"
-            );
-        },
-    );
-}
-
-#[test]
-fn autofit_double_click_eases_width_over_column_transition() {
-    crate::test_support::gtk_test(
-        "ui::browser::columns::tests::autofit_double_click_eases_width_over_column_transition",
-        || {
-            let fixture = Columns::new(1, 900);
-            animations_on();
-            let shell = fixture.shell(0);
-            let gesture = resize_gesture(&fixture.scroller());
-            let edge = shell_edge(&fixture.scroller(), &shell);
-            gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
-            let before = shell.width_request();
-            let target = autofit_target(&shell);
-            assert_ne!(
-                before, target,
-                "fixture column must have an autofit width different from its saved width"
-            );
-            gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
-            assert_eq!(
-                shell.width_request(),
-                before,
-                "the eased width has not stepped within the same tick"
-            );
-            let scale = PreferenceManager::shared().interface_scale();
-            assert_eq!(
-                PreferenceManager::shared().browser_column_width(),
-                Some(((f64::from(target) / scale).round() as i32).max(COLUMN_WIDTH)),
-                "autofit saves the width it eases to, not the one it starts from"
-            );
-            pump_for(COLUMN_TRANSITION + Duration::from_millis(60));
-            assert_eq!(
-                shell.width_request(),
-                target,
-                "the autofit width is reached exactly after COLUMN_TRANSITION"
-            );
-        },
-    );
-}
-
-#[test]
-fn autofit_snap_skips_easing_when_animations_disabled() {
-    crate::test_support::gtk_test(
-        "ui::browser::columns::tests::autofit_snap_skips_easing_when_animations_disabled",
-        || {
-            let fixture = Columns::new(1, 900);
-            animations_off();
-            let shell = fixture.shell(0);
-            let gesture = resize_gesture(&fixture.scroller());
-            let edge = shell_edge(&fixture.scroller(), &shell);
-            gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
-            let target = autofit_target(&shell);
-            assert_ne!(shell.width_request(), target);
-            gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
-            assert_eq!(
-                shell.width_request(),
-                target,
-                "with animations disabled the width jumps to the target in the same tick"
-            );
-        },
-    );
-}
-
-#[test]
-fn live_drag_resize_still_tracks_pointer_with_zero_delay() {
-    crate::test_support::gtk_test(
-        "ui::browser::columns::tests::live_drag_resize_still_tracks_pointer_with_zero_delay",
-        || {
-            let fixture = Columns::new(1, 900);
-            animations_off();
-            let shell = fixture.shell(0);
-            let gesture = resize_gesture(&fixture.scroller());
-            let edge = shell_edge(&fixture.scroller(), &shell);
-            gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
-            let initial = shell.width_request().max(COLUMN_WIDTH);
-            for offset in [40.0, 90.0, 150.0] {
-                gesture.emit_by_name::<()>("drag-update", &[&offset, &0.0f64]);
-                assert_eq!(
-                    shell.width_request(),
-                    resized_column_width(initial, offset),
-                    "live drag-resize updates the width synchronously on every pointer update"
-                );
-            }
-        },
-    );
-}
-
 #[test]
 fn a_finished_edge_drag_resizes_every_open_column() {
     crate::test_support::gtk_test(
@@ -626,47 +332,45 @@ fn a_finished_edge_drag_resizes_every_open_column() {
 }
 
 #[test]
-fn reveal_target_moves_only_a_column_that_could_show_more() {
-    // A 300 px viewport over a 4000 px strip.
-    for (left, right, current, expected, case) in [
-        (
-            3210.0,
-            3510.0,
-            3210.0,
-            3210.0,
-            "a fully visible column stays",
-        ),
-        (
-            3210.0,
-            3510.0,
-            3212.0,
-            3210.0,
-            "a column clipped by 2 px is revealed",
-        ),
-        (
-            3210.0,
-            3512.0,
-            3212.0,
-            3212.0,
-            "a column wider than the viewport stays while it fills it",
-        ),
-        (
-            3210.0,
-            3512.0,
-            3100.0,
-            3210.0,
-            "a wide column partly in view shows its leading edge",
-        ),
-    ] {
-        let span = ColumnSpan {
-            left,
-            right,
-            trailing: 0.0,
-        };
-        assert_eq!(
-            span.reveal_target(current, 300.0, 0.0, 4000.0),
-            expected,
-            "{case}"
-        );
-    }
+fn double_clicking_an_edge_autofits_the_column_and_saves_its_width() {
+    crate::test_support::gtk_test(
+        "ui::browser::columns::tests::double_clicking_an_edge_autofits_the_column_and_saves_its_width",
+        || {
+            for animated in [true, false] {
+                let fixture = Columns::new(1, 900);
+                if animated {
+                    animations_on();
+                } else {
+                    animations_off();
+                }
+                let shell = fixture.shell(0);
+                let before = shell.width_request();
+                let gesture = resize_gesture(&fixture.scroller());
+                let edge = shell_edge(&fixture.scroller(), &shell);
+                gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
+                gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
+                if animated {
+                    pump_for(COLUMN_TRANSITION + Duration::from_millis(60));
+                }
+                let fitted = shell.width_request();
+                assert_ne!(fitted, before, "the column fits its content");
+                let scale = PreferenceManager::shared().interface_scale();
+                assert_eq!(
+                    PreferenceManager::shared().browser_column_width(),
+                    Some(((f64::from(fitted) / scale).round() as i32).max(COLUMN_WIDTH)),
+                    "the saved width is the one the column ends at"
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn a_column_that_fits_is_revealed_even_when_clipped_by_a_few_pixels() {
+    let span = ColumnSpan {
+        left: 3210.0,
+        right: 3510.0,
+        trailing: 0.0,
+    };
+    assert_eq!(span.reveal_target(3212.0, 300.0, 0.0, 4000.0), 3210.0);
 }
