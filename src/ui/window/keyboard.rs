@@ -174,6 +174,13 @@ impl ChooserKeys {
         let browser = self.browser.upgrade()?;
         self.dispatcher.handle_chooser_key(&browser, key, modifiers)
     }
+
+    /// Returns false for a folder or no entry so the caller can navigate instead.
+    pub(in crate::ui) fn confirm_focused(&self) -> bool {
+        self.browser
+            .upgrade()
+            .is_some_and(|browser| self.dispatcher.chooser_confirm(&browser))
+    }
 }
 
 /// Leaving 10xer mode ends preview key ownership but keeps the drawer open.
@@ -222,6 +229,16 @@ fn bind_footer_filter(dispatcher: &Dispatcher) {
         view.upgrade()
             .map_or(Some(None), |view| view.filter_status())
     });
+    let shortcuts = dispatcher.shortcuts.clone();
+    dispatcher.view.set_footer_filter_focus(Rc::new(move || {
+        shortcuts.prompt_has_focus()
+            && matches!(
+                shortcuts.open_prompt_kind(),
+                Some(
+                    crate::ui::tenxer_mode::Prompt::Filter | crate::ui::tenxer_mode::Prompt::Search
+                )
+            )
+    }));
     let shortcuts = dispatcher.shortcuts.clone();
     dispatcher
         .view
@@ -672,6 +689,7 @@ impl Dispatcher {
             header_left_boundary: false,
         };
         self.window_commands(&event)
+            .or_else(|| self.default_tab_navigation(&event))
             .or_else(|| self.inline_editing(&event))
             .or_else(|| self.filter_and_location_commands(&event))
             .or_else(|| self.video_controls(&event))

@@ -6,9 +6,10 @@ mod text_size;
 use std::collections::HashSet;
 
 use super::{
-    Theme, ThemeTokens, azure_tokens, blend, builtins, color_to_hex, is_omarchy_theme_event,
-    merge_builtin_and_custom_themes, slugify, source_palette_from_quattro, source_style_scheme_xml,
-    title_case_slug, tokens_from_quattro, validate_tokens,
+    Theme, ThemeManager, ThemeTokens, azure_tokens, blend, builtins, color_to_hex,
+    is_omarchy_theme_event, merge_builtin_and_custom_themes, slugify, source_palette_from_quattro,
+    source_style_scheme_xml, themes_directory, title_case_slug, tokens_from_quattro,
+    validate_tokens,
 };
 use crate::test_support::gtk_test;
 
@@ -67,6 +68,72 @@ fn custom_themes_replace_bundled_themes_with_the_same_id() {
     assert_eq!(themes.len(), 1);
     assert!(themes[0].custom);
     assert_eq!(themes[0].tokens.name, "My Dracula");
+}
+
+#[test]
+fn saving_a_custom_theme_never_overwrites_an_existing_theme_file() {
+    gtk_test(
+        "ui::theme::tests::saving_a_custom_theme_never_overwrites_an_existing_theme_file",
+        || {
+            let directory = themes_directory();
+            let dotfiles = directory
+                .parent()
+                .expect("config directory")
+                .join("dotfiles");
+            std::fs::create_dir_all(&directory).expect("themes directory");
+            std::fs::create_dir_all(&dotfiles).expect("dotfiles directory");
+            let mut tokens = azure_tokens();
+            tokens.name = "Ocean Blue".to_owned();
+            let valid = toml::to_string_pretty(&tokens).expect("theme file");
+            std::fs::write(directory.join("ocean-blue.toml"), "not a theme").expect("broken theme");
+            std::fs::write(dotfiles.join("broken.toml"), "name = [").expect("broken dotfile");
+            std::os::unix::fs::symlink(
+                dotfiles.join("broken.toml"),
+                directory.join("ocean-blue-2.toml"),
+            )
+            .expect("link to a broken dotfile");
+            std::os::unix::fs::symlink(
+                dotfiles.join("missing.toml"),
+                directory.join("ocean-blue-3.toml"),
+            )
+            .expect("dangling link");
+            let manager = ThemeManager::shared();
+            std::fs::write(dotfiles.join("valid.toml"), &valid).expect("valid dotfile");
+            std::os::unix::fs::symlink(
+                dotfiles.join("valid.toml"),
+                directory.join("ocean-blue-4.toml"),
+            )
+            .expect("link added after startup");
+
+            let id = manager.save_custom_theme(tokens).expect("saved theme");
+
+            assert_eq!(id, "ocean-blue-5");
+            assert!(directory.join("ocean-blue-5.toml").is_file());
+            assert_eq!(
+                std::fs::read_to_string(directory.join("ocean-blue.toml")).expect("broken theme"),
+                "not a theme"
+            );
+            for (link, target) in [
+                ("ocean-blue-2.toml", "broken.toml"),
+                ("ocean-blue-3.toml", "missing.toml"),
+                ("ocean-blue-4.toml", "valid.toml"),
+            ] {
+                assert_eq!(
+                    std::fs::read_link(directory.join(link)).expect("theme link"),
+                    dotfiles.join(target)
+                );
+            }
+            assert_eq!(
+                std::fs::read_to_string(dotfiles.join("broken.toml")).expect("broken dotfile"),
+                "name = ["
+            );
+            assert!(!dotfiles.join("missing.toml").exists());
+            assert_eq!(
+                std::fs::read_to_string(dotfiles.join("valid.toml")).expect("valid dotfile"),
+                valid
+            );
+        },
+    );
 }
 
 #[test]
@@ -247,4 +314,44 @@ fn omarchy_monitor_ignores_unrelated_state_changes() {
     ] {
         assert!(!is_omarchy_theme_event(&gtk::gio::File::for_path(path)));
     }
+}
+
+#[test]
+fn appearance_changes_keep_an_active_preview_until_it_is_cancelled() {
+    gtk_test(
+        "ui::theme::tests::appearance_changes_keep_an_active_preview_until_it_is_cancelled",
+        || {
+            use crate::ui::preferences::{PreferenceManager, TextSize};
+
+            let manager = super::ThemeManager::shared();
+            manager.set_follow_omarchy(false);
+            manager.select_theme("azure-glow");
+            let saved = manager.active_model_palette();
+            let mut tokens = manager.starter_tokens();
+            tokens.accent = "#13579b".to_owned();
+            manager.preview(&tokens);
+            assert_eq!(manager.active_model_palette().accent, 0x13579b);
+
+            let preferences = PreferenceManager::shared();
+            let original = preferences.text_size();
+            let changed = if original.root_font_px() == 20 {
+                18
+            } else {
+                20
+            };
+            preferences.set_text_size(TextSize::new(changed));
+            assert_eq!(
+                manager.active_model_palette().accent,
+                0x13579b,
+                "a text size change keeps the unsaved preview applied"
+            );
+            assert!(manager.is_previewing());
+
+            manager.cancel_preview();
+            assert!(!manager.is_previewing());
+            assert_eq!(manager.active_model_palette(), saved);
+            preferences.set_text_size(original);
+            assert_eq!(manager.active_model_palette(), saved);
+        },
+    );
 }

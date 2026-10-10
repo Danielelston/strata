@@ -72,8 +72,11 @@ receive incremental updates. Shared browser effects in `ui/browser/events.rs` st
 before alternate-mode dispatch. Browser notifications remain synchronous: pane/query
 updates must release `ModeViews` borrows before notifying observers. Load completion
 returns a selection-restoration action; the caller releases `ModeViews` before
-applying it, with the saved position already taken out of `ListNavigation`. Footer
+applying it, with the saved position already taken out of `PaneNavigation`. Footer
 and selection observers therefore see restored state without dropped events.
+`NavigationStarting` and `ColumnReloading` are the two pre-mutation capture events:
+the outgoing directory, or a column about to be cleared for a reload, is still
+readable when they arrive.
 
 Pane helpers share string-model splicing, but authoritative entry borrows end before GTK
 notifications. Reload detaches selection/filter models without detaching the collection
@@ -233,7 +236,9 @@ Filesystem work for Trash lives in `adapters/trash.rs`. Measurement shares one e
 across root and descendant batches; depth truncation and unreadable descendants remain branch-local.
 Deleting Trash streams its own batches, independently of any incomplete measurement. Native path
 and GIO URI conversion lives in `adapters/gio_location.rs`, shared by files, operations, preview and
-browser presentation. It preserves native bytes and sanitizes credentials on inbound GIO locations.
+browser presentation. It preserves native bytes, keeps GLib's normalized percent-encoding (so names
+that are not valid UTF-8 and encoded slashes survive), and sanitizes credentials on inbound GIO
+locations.
 
 Local archive operations live under `adapters/local_operations/archive/`:
 

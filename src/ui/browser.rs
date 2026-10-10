@@ -63,6 +63,7 @@ mod progress;
 mod properties;
 mod result_selection;
 mod tab_location;
+mod tab_stops;
 mod transfer;
 mod trash;
 
@@ -80,8 +81,8 @@ pub(crate) use crate::ui::browser::clipboard::{
 pub(crate) use crate::ui::browser::collection::{
     ActivePaneFilter, bind_listing_filter, detach_collection_view, filter_placeholder,
     focus_collection_item_when_allocated, focus_filter_entry, notify_filter_query,
-    prepare_collection_inline_edit, restore_filter_controls, reveal_collection_after_layout,
-    scroll_collection_when_allocated, search_result_entry,
+    prepare_collection_inline_edit, refocus_filter_entry, restore_filter_controls,
+    reveal_collection_after_layout, scroll_collection_when_allocated, search_result_entry,
 };
 pub(in crate::ui) use crate::ui::browser::collection::{FilterQueryBinding, bind_filter_query};
 pub(super) use crate::ui::browser::context_menu::{
@@ -91,14 +92,14 @@ pub(super) use crate::ui::browser::context_menu::{
 pub(super) use crate::ui::browser::desktop::{launch_terminal, open_location_at};
 pub(super) use crate::ui::browser::entry::{
     FOLDER_TYPE_GROUP, OTHER_TYPE_GROUP, entry_filter, entry_icon, entry_model_value,
-    format_file_size, icon_for_name, metadata_needs_fill, model_type_group, rounded_size_and_unit,
+    format_file_size, icon_for_name, metadata_needs_fill, model_type_group,
 };
 pub(crate) use crate::ui::browser::file_commands::{
     ConflictFocus, CreateRefusal, PinChange, TargetCommand, Yank, can_rename,
 };
 pub(super) use crate::ui::browser::inline_edit::{queue_rename, reveal_rename_row};
 pub(in crate::ui) use crate::ui::browser::listing_filter::{
-    FilterStatus, results_step_target, scroll_results_to, selected_cursor,
+    FilterFocus, FilterStatus, results_step_target, scroll_results_to, selected_cursor,
 };
 pub(super) use crate::ui::browser::pane_header::{
     column_sort_direction_toggle, column_sort_menu, empty_trash_button, pane_new_folder_button,
@@ -208,6 +209,7 @@ pub(super) struct ViewState {
     suppress_focus_scroll: Cell<bool>,
     /// Set while a footer prompt moves the cursor; the prompt keeps the keys.
     cursor_keeps_focus: Cell<bool>,
+    tab_crossing: Cell<tab_stops::TabCrossing>,
     pending_mirror: RefCell<Option<glib::SourceId>>,
     source_generation: Rc<Cell<u64>>,
     peek: RefCell<Option<PeekView>>,
@@ -361,11 +363,13 @@ impl BrowserView {
         let location_entry = gtk::Entry::builder()
             .hexpand(true)
             .width_chars(36)
-            .placeholder_text("Enter a path or URI…")
+            .placeholder_text(crate::i18n::tr("Enter a path or URI…"))
             .build();
         location_entry.add_css_class("location-entry");
         let confirm_location = gtk::Button::builder()
-            .tooltip_text(super::accessibility::LOCATION_CONFIRM_LABEL)
+            .tooltip_text(crate::i18n::tr(
+                super::accessibility::LOCATION_CONFIRM_LABEL,
+            ))
             .build();
         confirm_location.set_child(Some(&crate::assets::primary_icon(
             crate::assets::icons::CHECK,
@@ -373,7 +377,7 @@ impl BrowserView {
         )));
         confirm_location.add_css_class("location-action");
         let cancel_location = gtk::Button::builder()
-            .tooltip_text(super::accessibility::LOCATION_CANCEL_LABEL)
+            .tooltip_text(crate::i18n::tr(super::accessibility::LOCATION_CANCEL_LABEL))
             .build();
         cancel_location.set_child(Some(&crate::assets::primary_icon(
             crate::assets::icons::X,
@@ -528,7 +532,10 @@ impl BrowserView {
 
         let global_activity_spinner = gtk::Spinner::new();
         global_activity_spinner.add_css_class("global-activity-spinner");
-        crate::ui::accessibility::set_description(&global_activity_spinner, Some("Working…"));
+        crate::ui::accessibility::set_description(
+            &global_activity_spinner,
+            Some(&crate::i18n::tr("Working…")),
+        );
         global_activity_spinner.set_visible(false);
         let location_control = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         location_control.add_css_class("location-control");
@@ -596,6 +603,7 @@ impl BrowserView {
             horizontal_scroll_generation: Rc::new(Cell::new(0)),
             suppress_focus_scroll: Cell::new(false),
             cursor_keeps_focus: Cell::new(false),
+            tab_crossing: Cell::new(tab_stops::TabCrossing::None),
             pending_mirror: RefCell::new(None),
             source_generation,
             peek: RefCell::new(None),
@@ -1058,6 +1066,8 @@ impl BrowserView {
         // The rebuilt view has a different displayed order for the same anchor.
         self.state.browser.leave_visual();
         let searching = self.state.listing_search_showing();
+        // Read before the rebuild tears down the focused field or results.
+        let filter_focus = self.state.filter_focus();
         self.state.mode.set(mode);
         let filter = match previous {
             BrowserMode::Columns => self.state.capture_active_column_filter(),
@@ -1087,10 +1097,41 @@ impl BrowserView {
                 .clear_inactive_mode(previous),
         }
         self.state.carry_listing_search(searching);
-        if mode == BrowserMode::Columns {
+        self.restore_view_switch_focus(filter_focus);
+    }
+
+    /// Focus follows the filter session across a view switch.
+    fn restore_view_switch_focus(&self, filter_focus: Option<FilterFocus>) {
+        if let Some(target) = self.filter_target() {
+            if filter_focus == Some(FilterFocus::Entry) {
+                refocus_filter_entry(target.entry());
+                return;
+            }
+            if filter_focus == Some(FilterFocus::Results)
+                || listing_filter::filter_shows_query(&target)
+            {
+                target.settle();
+                self.focus_filter_results(&target);
+                return;
+            }
+        }
+        if self.view_mode() == BrowserMode::Columns {
             self.state.focus_rebuilt_active_column();
         } else if let Some(depth) = self.state.browser.active_depth() {
             self.state.mode_views.borrow().focus_visible_pane(depth);
+        }
+    }
+
+    /// Focus for a view switched from a menu, once the menu has closed: results replace
+    /// the listing that would otherwise take focus.
+    pub(in crate::ui) fn focus_switched_view(&self) {
+        if let Some(target) = self
+            .filter_target()
+            .filter(listing_filter::filter_shows_query)
+        {
+            self.focus_filter_results(&target);
+        } else {
+            self.state.browser.focus_active();
         }
     }
 
@@ -1102,6 +1143,24 @@ impl BrowserView {
         } else {
             self.state.browser.focus_active();
         }
+    }
+
+    pub(in crate::ui) fn restore_listing_focus(&self) {
+        self.state.restore_listing_focus();
+    }
+
+    /// Makes this listing the focus target when a dismissed overlay leaves `window`
+    /// without a focused widget.
+    pub(in crate::ui) fn set_as_modal_focus_fallback(&self, window: &gtk::Window) {
+        let view = self.downgrade();
+        crate::ui::modal::set_modal_focus_fallback(
+            window,
+            Rc::new(move || {
+                if let Some(view) = view.upgrade() {
+                    view.restore_listing_focus();
+                }
+            }),
+        );
     }
 
     pub fn set_density(&self, density: BrowserDensity) {
@@ -1308,7 +1367,7 @@ impl BrowserView {
                         || focused.is_ancestor(&column.header_actions)
                 })
             })
-            .is_some_and(|column| column.list.grab_focus())
+            .is_some_and(ColumnView::focus_surface)
     }
 
     pub fn navigate_up(&self) {
@@ -1329,7 +1388,7 @@ impl BrowserView {
                     .location_at(0)
                     .and_then(|location| location.parent())
                 {
-                    self.state.browser.navigate(parent);
+                    self.state.browser.navigate_to_ancestor(parent);
                 }
             }
             Some(depth) => self.state.browser.close_column(depth),
@@ -1387,7 +1446,7 @@ impl BrowserView {
         if let Err(error) = self.state.open_typed_location(input, base.as_deref()) {
             show_error_dialog(
                 &self.state.overlay,
-                "Unable to open location",
+                &crate::i18n::tr("Unable to open location"),
                 &error.to_string(),
             );
         }
@@ -1507,8 +1566,8 @@ impl BrowserView {
         cancel_source(&self.state.pending_peek);
         self.state.browser.close_peek();
         // Capture-phase keys run before the pane sees the event that would cancel
-        // an in-progress history restore, so the command has to cancel it first.
-        self.state.mode_views.borrow_mut().cancel_list_restore();
+        // an in-progress restore, so the command has to cancel it first.
+        self.state.mode_views.borrow_mut().cancel_pending_restore();
         self.state.sync_mode_selection();
         self.state.cancel_tab_location_hold();
         self.state.refresh_destination_style();
@@ -2029,21 +2088,7 @@ impl BrowserView {
     }
 
     pub fn filter_has_focus(&self) -> bool {
-        match self.view_mode() {
-            BrowserMode::Columns => {
-                let focused = self.state.overlay.root().and_then(|root| root.focus());
-                self.state.columns.borrow().iter().any(|column| {
-                    column.filter_entry.has_focus()
-                        || focused.as_ref().is_some_and(|focused| {
-                            focused == column.filter_entry.upcast_ref::<gtk::Widget>()
-                                || focused.is_ancestor(&column.filter_entry)
-                        })
-                })
-            }
-            BrowserMode::Icons | BrowserMode::List => {
-                self.state.mode_views.borrow().filter_has_focus()
-            }
-        }
+        self.filter_focus() == Some(FilterFocus::Entry)
     }
 
     /// Recursive results have their own selection, independent of the directory's selection.
@@ -2292,39 +2337,22 @@ impl BrowserView {
     }
 
     /// Moves the focus to the first or last visible entry of the active pane, for
-    /// `Ctrl+Up` and `Ctrl+Down`.
+    /// `Ctrl+Up`/`Ctrl+Down` and plain `Home`/`End`. Works from a focused row or
+    /// tile, from the collection view itself, and from the pane surface while it
+    /// shows a loading page.
     pub fn jump_selection(&self, direction: i32) -> bool {
         let focused = self.state.overlay.root().and_then(|root| root.focus());
-        let Some((view, scroll)) = focused
+        let collection = focused
             .as_ref()
-            .and_then(super::scrolling::focused_collection)
-        else {
-            return false;
-        };
-        let order = self
-            .state
-            .browser
-            .active_depth()
-            .map(|depth| self.state.mode_views.borrow().visual_order(depth))
-            .filter(|order| !order.is_empty());
-        self.state
-            .browser
-            .page_along(direction, usize::MAX, order.as_deref());
-        super::scrolling::reveal_jump(&view, &scroll, direction);
-        true
-    }
-
-    pub fn jump_parked_selection(&self, direction: i32) -> bool {
-        if !self.item_view_has_focus()
-            || !self
-                .state
-                .overlay
-                .root()
-                .and_then(|root| root.focus())
-                .is_some_and(|focused| focused.is::<gtk::Stack>())
-        {
+            .and_then(super::scrolling::focused_collection);
+        let parked = focused
+            .as_ref()
+            .is_some_and(|focused| focused.is::<gtk::Stack>())
+            && self.item_view_has_focus();
+        if collection.is_none() && !parked {
             return false;
         }
+        self.keyboard_navigation();
         let order = self
             .state
             .browser
@@ -2334,6 +2362,9 @@ impl BrowserView {
         self.state
             .browser
             .page_along(direction, usize::MAX, order.as_deref());
+        if let Some((view, scroll)) = collection {
+            super::scrolling::reveal_jump(&view, &scroll, direction);
+        }
         true
     }
 
@@ -2350,23 +2381,31 @@ impl BrowserView {
         empty && self.dismiss_focused_filter()
     }
 
+    /// Dismisses the filter whose field or results have focus. An empty revealed
+    /// Columns filter has no results, so Escape on its rows clears the selection instead.
     pub fn dismiss_focused_filter(&self) -> bool {
         if self.state.mode_views.borrow().dismiss_focused_filter() {
             return true;
         }
         let focused = self.state.overlay.root().and_then(|root| root.focus());
-        let columns = self.state.columns.borrow();
-        let Some(column) = columns.iter().find(|column| {
-            column.filter_entry.has_focus()
-                || focused.as_ref().is_some_and(|focused| {
-                    focused == column.filter_entry.upcast_ref::<gtk::Widget>()
-                        || focused.is_ancestor(&column.filter_entry)
-                })
-        }) else {
+        let column = focused.and_then(|focused| {
+            self.state
+                .columns
+                .borrow()
+                .iter()
+                .find(|column| listing_filter::column_filter_focus(column, &focused).is_some())
+                .cloned()
+        });
+        let Some(column) = column else {
             return false;
         };
         column.filter_button.set_active(false);
-        column.list.grab_focus();
+        // Show the listing now rather than after the debounce, so focus lands on it.
+        column.flush_filter_query();
+        column.focus_surface();
+        // The returning rows arrive unselected; restore the directory's cursor and
+        // selection on them.
+        self.state.browser.focus_active();
         true
     }
 
@@ -2452,6 +2491,20 @@ impl BrowserView {
 }
 
 impl ViewState {
+    /// Returns focus to the listing after an overlay closes: the cursor row, or the
+    /// pane surface of an empty or loading directory.
+    pub(super) fn restore_listing_focus(&self) {
+        if self.mode.get() == BrowserMode::Columns {
+            self.focus_rebuilt_active_column();
+            return;
+        }
+        self.browser.focus_active();
+        let focused = self.overlay.root().and_then(|root| root.focus());
+        if !focused.is_some_and(|focused| focused.is_mapped()) {
+            self.mode_views.borrow().focus_pane_surface();
+        }
+    }
+
     pub(super) fn notify_search_selection_changed(&self) {
         let handlers = self.search_selection_handlers.borrow().clone();
         for handler in handlers {
@@ -2495,7 +2548,7 @@ impl ViewState {
             self.global_activity_spinner.set_visible(false);
             crate::ui::accessibility::set_description(
                 &self.global_activity_spinner,
-                Some("Working…"),
+                Some(&crate::i18n::tr("Working…")),
             );
         }
     }
@@ -2669,9 +2722,7 @@ impl ViewState {
                     })
             {
                 // Do not leave keyboard focus inside controls hidden by pointer navigation.
-                if !column.list.grab_focus() {
-                    column.presentation.stack.grab_focus();
-                }
+                column.focus_surface();
             }
             column
                 .header_actions_stack
@@ -2711,6 +2762,15 @@ impl ViewState {
         })
     }
 
+    /// Like `ModeViews::listing_may_take_focus`, for any column.
+    fn column_may_take_focus(&self) -> bool {
+        self.overlay
+            .root()
+            .and_then(|root| root.focus())
+            .is_none_or(|focused| focused.root().is_none())
+            || self.focused_column_depth().is_some()
+    }
+
     fn select_all(&self, depth: usize) {
         if self.mode.get() != BrowserMode::Columns {
             self.browser.select_all(depth);
@@ -2718,7 +2778,7 @@ impl ViewState {
         }
         if let Some(column) = self.columns.borrow().get(depth) {
             column.selection.select_all();
-            column.list.grab_focus();
+            column.focus_surface();
         }
     }
 }

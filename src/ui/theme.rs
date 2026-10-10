@@ -172,7 +172,8 @@ pub struct ThemeManager {
     omarchy_available: Cell<bool>,
     omarchy_monitors: RefCell<Vec<gio::FileMonitor>>,
     pending_omarchy_refresh: RefCell<Option<glib::SourceId>>,
-    previewing: Cell<bool>,
+    preview: RefCell<Option<ThemeTokens>>,
+    preview_generation: Cell<u64>,
     appearance: RefCell<AppearancePreferences>,
     theme_listeners: ThemeListeners,
     active_model_palette: Cell<crate::services::ModelPalette>,
@@ -212,7 +213,8 @@ impl ThemeManager {
             omarchy_available: Cell::new(omarchy_available),
             omarchy_monitors: RefCell::new(Vec::new()),
             pending_omarchy_refresh: RefCell::new(None),
-            previewing: Cell::new(false),
+            preview: RefCell::new(None),
+            preview_generation: Cell::new(0),
             appearance: RefCell::new(appearance),
             theme_listeners: ThemeListeners::default(),
             active_model_palette: Cell::new(crate::services::ModelPalette {
@@ -268,7 +270,7 @@ impl ThemeManager {
         if !self.themes.borrow().iter().any(|theme| theme.id == id) {
             return;
         }
-        self.previewing.set(false);
+        self.preview.take();
         let changed = self.follows_omarchy() || self.selected_id() != id;
         self.preferences.set_theme_selection("theme", Some(id));
         if !changed {
@@ -281,7 +283,7 @@ impl ThemeManager {
         if enabled && !self.is_omarchy_available() {
             return;
         }
-        self.previewing.set(false);
+        self.preview.take();
         let changed = self.follows_omarchy() != enabled;
         let mode = if enabled { "omarchy" } else { "theme" };
         self.preferences.set_theme_selection(mode, None);
@@ -290,17 +292,34 @@ impl ThemeManager {
         }
     }
 
-    pub fn preview(&self, tokens: &ThemeTokens) {
-        if validate_tokens(tokens).is_ok() {
-            self.previewing.set(true);
-            self.apply_tokens(tokens, None);
-        }
+    /// Applies `tokens` until [`Self::cancel_preview`] or a theme selection; appearance
+    /// changes in the meantime re-apply the preview rather than the saved theme.
+    /// Returns the preview's generation for [`Self::cancel_preview_from`].
+    pub fn preview(&self, tokens: &ThemeTokens) -> Option<u64> {
+        validate_tokens(tokens).ok()?;
+        self.preview.replace(Some(tokens.clone()));
+        self.preview_generation
+            .set(self.preview_generation.get().wrapping_add(1));
+        self.apply_tokens(tokens, None);
+        Some(self.preview_generation.get())
     }
 
     pub fn cancel_preview(&self) {
-        if self.previewing.replace(false) {
+        if self.preview.take().is_some() {
             self.apply_selected();
         }
+    }
+
+    /// Cancels the preview only if no later one has replaced it.
+    pub fn cancel_preview_from(&self, generation: u64) {
+        if self.preview_generation.get() == generation {
+            self.cancel_preview();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_previewing(&self) -> bool {
+        self.preview.borrow().is_some()
     }
 
     pub fn save_custom_theme(&self, tokens: ThemeTokens) -> io::Result<String> {
@@ -315,30 +334,25 @@ impl ThemeManager {
         }
         let directory = themes_directory();
         fs::create_dir_all(&directory)?;
+        // Never replace a file already there, even one that did not load: it may be
+        // a broken or newly linked dotfile the user still wants.
         let mut id = base.clone();
         let mut suffix = 2;
-        while self.themes.borrow().iter().any(|theme| theme.id == id) {
+        while self.themes.borrow().iter().any(|theme| theme.id == id)
+            || fs::symlink_metadata(directory.join(format!("{id}.toml"))).is_ok()
+        {
             id = format!("{base}-{suffix}");
             suffix += 1;
         }
         let path = directory.join(format!("{id}.toml"));
         let value = toml::to_string_pretty(&tokens).map_err(io::Error::other)?;
-        crate::storage::atomic_write(&path, value.as_bytes())?;
+        crate::storage::atomic_write_config(&path, value.as_bytes())?;
 
-        let mut themes = self.themes.borrow_mut();
-        if let Some(theme) = themes
-            .iter_mut()
-            .find(|theme| theme.id == id && theme.custom)
-        {
-            theme.tokens = tokens;
-        } else {
-            themes.push(Theme {
-                id: id.clone(),
-                tokens,
-                custom: true,
-            });
-        }
-        drop(themes);
+        self.themes.borrow_mut().push(Theme {
+            id: id.clone(),
+            tokens,
+            custom: true,
+        });
         self.select_theme(&id);
         Ok(id)
     }
@@ -367,6 +381,11 @@ impl ThemeManager {
     }
 
     fn apply_selected(&self) {
+        let preview = self.preview.borrow().clone();
+        if let Some(tokens) = preview {
+            self.apply_tokens(&tokens, None);
+            return;
+        }
         if self.follows_omarchy() {
             if let Some(tokens) = load_omarchy_theme(self.preferences.omarchy_variant()) {
                 let palette = load_omarchy_source_palette();
@@ -451,9 +470,7 @@ impl ThemeManager {
             let Some(manager) = weak.upgrade() else {
                 return;
             };
-            if !manager.previewing.get() {
-                manager.apply_selected();
-            }
+            manager.apply_selected();
         });
     }
 
@@ -505,7 +522,7 @@ impl ThemeManager {
                     let availability_changed =
                         manager.omarchy_available.replace(available) != available;
                     if !available && manager.follows_omarchy() {
-                        manager.previewing.set(false);
+                        manager.preview.take();
                         manager.preferences.set_theme_selection("theme", None);
                         return;
                     }
@@ -513,7 +530,7 @@ impl ThemeManager {
                         manager.preferences.notify_changes();
                         return;
                     }
-                    if manager.follows_omarchy() && !manager.previewing.get() {
+                    if manager.follows_omarchy() {
                         manager.apply_selected();
                         manager.preferences.notify_changes();
                     }

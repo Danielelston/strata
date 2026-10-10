@@ -115,6 +115,69 @@ pub(super) fn contains_widget(container: &gtk::Widget, focused: Option<&gtk::Wid
     focused.is_some_and(|focused| focused == container || focused.is_ancestor(container))
 }
 
+/// Moves focus to the next (`TabForward`) or previous (`TabBackward`) focusable widget
+/// outside `scope` in Tab order, wrapping at the ends of the window as GTK does. Never
+/// enters `scope`, so a whole subtree acts as one Tab stop.
+pub(super) fn focus_beyond(scope: &gtk::Widget, direction: gtk::DirectionType) -> bool {
+    let backward = direction == gtk::DirectionType::TabBackward;
+    let step = |widget: &gtk::Widget| {
+        if backward {
+            widget.prev_sibling()
+        } else {
+            widget.next_sibling()
+        }
+    };
+    let focus = |candidate: &gtk::Widget| {
+        candidate.is_mapped() && candidate.is_sensitive() && candidate.child_focus(direction)
+    };
+    let mut path = vec![scope.clone()];
+    while let Some(parent) = path.last().and_then(gtk::Widget::parent) {
+        path.push(parent);
+    }
+    for widget in &path {
+        let mut sibling = step(widget);
+        while let Some(candidate) = sibling {
+            if focus(&candidate) {
+                return true;
+            }
+            sibling = step(&candidate);
+        }
+    }
+    for widget in path.iter().rev() {
+        let Some(parent) = widget.parent() else {
+            continue;
+        };
+        let mut sibling = if backward {
+            parent.last_child()
+        } else {
+            parent.first_child()
+        };
+        while let Some(candidate) = sibling.filter(|candidate| candidate != widget) {
+            if focus(&candidate) {
+                return true;
+            }
+            sibling = step(&candidate);
+        }
+    }
+    false
+}
+
+/// Whether `focused` was detached from `container` while the window's focus chain still
+/// runs through it (GTK moves focus at the next paint).
+pub(super) fn focus_removed_from(container: &gtk::Widget, focused: &gtk::Widget) -> bool {
+    if focused.root().is_some() {
+        return false;
+    }
+    let mut child = container.clone();
+    while let Some(parent) = child.parent() {
+        if parent.focus_child().as_ref() != Some(&child) {
+            return false;
+        }
+        child = parent;
+    }
+    child.is::<gtk::Root>()
+}
+
 pub(super) fn editable(widget: &gtk::Widget) -> bool {
     widget.is::<gtk::Editable>()
         || widget.is::<gtk::TextView>()

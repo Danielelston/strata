@@ -20,7 +20,7 @@ Cancel or conversion failure leaves the chooser open without returning the incom
 
 Folder-only requests hide regular files in both directory listings and recursive results. File requests keep folders available for navigation. Changing a file-type filter refreshes the current results without clearing the search query; selection and acceptance follow the new filter.
 
-In Save dialogs, selecting a file copies its name into the name input without accepting the dialog. The automatic initial selection does not change the suggested name or destination. Selecting a folder changes the destination without changing the name. In Recent, select a file to save in its containing folder, or navigate to a local folder first.
+In Save dialogs, selecting a file copies its name into the name input without accepting the dialog. Names that are not valid UTF-8 display with replacement characters, but Save still targets the selected file's exact name while the name input shows it unchanged. The automatic initial selection does not change the suggested name or destination. Selecting a folder changes the destination without changing the name. In Recent, select a file to save in its containing folder, or navigate to a local folder first.
 
 Resizing a Miller column or a List heading in the chooser saves that width as the chooser default, so the next request opens with it. Regular Strata windows also remember widths, using separate browser defaults.
 
@@ -158,12 +158,17 @@ On a desktop that does not manage the frontend as a systemd user unit, log out a
   and select the suggested filename. If focus is lost, an arrow restores it without
   requiring a click.
 - Tab/Shift+Tab traverse controls; arrows move between toolbar icons and options.
+  The file list is a single Tab stop (the whole strip in Columns), and Tab into
+  it lands on the keyboard cursor.
 - Up from the first file row reaches the pane toolbar; Down returns to files.
 - Icons arrows follow the visual rows and columns. List arrows follow the
   displayed order, including type grouping. Shift+arrows extend or shrink a range
   across groups; plain arrows select only the focused item.
 - Space/Enter activate focused buttons and toggles. Down or Enter opens a focused
   dropdown; its arrows and Enter select an option.
+- Enter on a focused file accepts the request. In a multiple-selection request
+  with files selected, it returns every selected file, the same as **Open**.
+  Enter on a folder opens it.
 - F2 renames a single selected file or folder. Escape cancels the name editor
   without closing the chooser. Right-click an item for Rename or Properties;
   right-click empty pane space for New Folder. Alt+Enter opens Properties from

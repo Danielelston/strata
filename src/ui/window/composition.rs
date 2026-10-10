@@ -73,6 +73,8 @@ impl WindowContent {
         window.set_child(Some(&self.overlay));
         tenxer_splash::install(window, &self.overlay, preferences);
         super::install_modal_focus_trap(window);
+        self.browser
+            .set_as_modal_focus_fallback(window.upcast_ref());
         notice
     }
 
@@ -135,6 +137,16 @@ impl WindowContent {
     #[cfg(test)]
     pub(super) fn settings_button(&self) -> &gtk::Button {
         &self.header.settings
+    }
+
+    #[cfg(test)]
+    pub(super) fn minimize_button(&self) -> &gtk::Button {
+        &self.header.minimize
+    }
+
+    #[cfg(test)]
+    pub(super) fn maximize_button(&self) -> &gtk::Button {
+        &self.header.maximize
     }
 
     #[cfg(test)]

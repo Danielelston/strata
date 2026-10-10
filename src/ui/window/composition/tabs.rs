@@ -9,7 +9,7 @@ use gtk::{gdk, gio, glib, prelude::*};
 
 use crate::{
     model::Location,
-    ui::{blur::BlurBin, browser::BrowserView, preferences::PreferenceManager},
+    ui::{blur::BlurBin, browser::BrowserView, preferences::PreferenceManager, tabs_session},
 };
 
 use super::{WindowContent, layout, tenxer_splash};
@@ -36,12 +36,15 @@ pub(in crate::ui::window) struct TabWindow {
     active: Cell<u64>,
     next_id: Cell<u64>,
     hints: Cell<bool>,
+    restoring: Cell<bool>,
+    persist: bool,
 }
 
 impl TabWindow {
     pub(in crate::ui::window) fn new(
         window: &gtk::ApplicationWindow,
         preferences: &Rc<PreferenceManager>,
+        persist: bool,
     ) -> Rc<Self> {
         let stack = gtk::Stack::new();
         stack.set_hhomogeneous(false);
@@ -65,29 +68,43 @@ impl TabWindow {
             active: Cell::new(0),
             next_id: Cell::new(1),
             hints: Cell::new(false),
+            restoring: Cell::new(false),
+            persist,
             drag_token: glib::uuid_string_random().to_string(),
         });
         state.add(None);
         state.install_actions(window);
         state.install_keys(window);
         super::super::install_modal_focus_trap(window);
-        tenxer_splash::install(window, &overlay, preferences);
         let weak = Rc::downgrade(&state);
-        window.connect_close_request(move |window| {
-            let Some(state) = weak.upgrade() else {
-                return glib::Propagation::Proceed;
-            };
-            if state
+        crate::ui::modal::set_modal_focus_fallback(
+            window.upcast_ref(),
+            Rc::new(move || {
+                let browser = weak.upgrade().and_then(|state| {
+                    let active = state.active.get();
+                    state
+                        .tabs
+                        .borrow()
+                        .iter()
+                        .find(|tab| tab.id == active)
+                        .map(|tab| tab.content.browser.clone())
+                });
+                if let Some(browser) = browser {
+                    browser.restore_listing_focus();
+                }
+            }),
+        );
+        tenxer_splash::install(window, &overlay, preferences);
+        preferences.register_save_notice_window(window.upcast_ref());
+        let weak = Rc::downgrade(&state);
+        crate::ui::close_guard::install(window, move |_| {
+            let state = weak.upgrade()?;
+            state
                 .tabs
                 .borrow()
                 .iter()
                 .any(|tab| tab.content.browser.browser().has_background_operations())
-            {
-                operations_active(window);
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
-            }
+                .then(operations_active)
         });
         let retained = state.clone();
         window.connect_unrealize(move |window| {
@@ -174,6 +191,7 @@ impl TabWindow {
         content.browser.observe_tab_location(move |location| {
             if let Some(state) = weak.upgrade() {
                 state.strip.label(id, &tab_label(location));
+                state.persist_session();
             }
         });
         if id == 1 {
@@ -210,17 +228,17 @@ impl TabWindow {
         tab.content.activate_actions(&window);
         self.refresh_chrome();
         self.strip.select(id);
-        if let Some(focus) = tab
+        let saved = tab
             .focus
             .borrow()
             .as_ref()
             .and_then(glib::WeakRef::upgrade)
-            .filter(|widget| widget.is_mapped())
-        {
-            focus.grab_focus();
-        } else {
+            .filter(|widget| widget.is_mapped());
+        // Saved focus may be a pane surface that is no longer focusable.
+        if !saved.is_some_and(|focus| focus.grab_focus()) {
             tab.content.browser.browser().focus_active();
         }
+        self.persist_session();
     }
 
     fn close(&self, id: u64) {
@@ -240,7 +258,7 @@ impl TabWindow {
             .browser()
             .has_background_operations()
         {
-            operations_active(&window);
+            operations_active().show(window.upcast_ref());
             return;
         }
         if tabs.len() == 1 {
@@ -264,6 +282,7 @@ impl TabWindow {
         self.stack.remove(&tab.content.overlay);
         self.strip.remove(id);
         self.refresh_chrome();
+        self.persist_session();
     }
 
     fn refresh_chrome(&self) {
@@ -284,11 +303,15 @@ impl TabWindow {
                 header.actions.prepend(&header.new_tab);
                 header.actions.append(&header.close);
                 header.new_tab.set_visible(!multiple);
-                header.close.set_visible(!multiple);
+                header
+                    .close
+                    .set_visible(!multiple && self.preferences.window_show_close());
             }
             if tab.id == self.active.get() {
                 header.new_tab.set_visible(true);
-                header.close.set_visible(true);
+                header
+                    .close
+                    .set_visible(self.preferences.window_show_close());
             }
         }
         self.strip.hints(self.hints.get());
@@ -369,6 +392,8 @@ impl TabWindow {
         self.strip
             .reorder(&tabs.iter().map(|tab| tab.id).collect::<Vec<_>>());
         self.strip.hints(self.hints.get());
+        drop(tabs);
+        self.persist_session();
     }
 
     fn move_active_tab(&self, delta: i32) {
@@ -390,6 +415,61 @@ impl TabWindow {
         if self.hints.replace(show) != show {
             self.strip.hints(show);
         }
+    }
+
+    fn persist_session(&self) {
+        if !self.persist || self.restoring.get() {
+            return;
+        }
+        if !self.preferences.restore_tabs() {
+            tabs_session::remove();
+            return;
+        }
+        let tabs = self.tabs.borrow();
+        let mut locations = Vec::with_capacity(tabs.len());
+        let mut active = 0;
+        for tab in tabs.iter() {
+            let Some(location) = tab.content.browser.browser().active_location() else {
+                continue;
+            };
+            if tab.id == self.active.get() {
+                active = locations.len();
+            }
+            locations.push(location);
+        }
+        drop(tabs);
+        if locations.is_empty() {
+            return;
+        }
+        tabs_session::save(&locations, active);
+    }
+
+    pub(in crate::ui::window) fn try_restore(self: &Rc<Self>) -> bool {
+        if !self.preferences.restore_tabs() {
+            return false;
+        }
+        let Some(session) = tabs_session::load_restorable() else {
+            return false;
+        };
+        if session.tabs.is_empty() {
+            return false;
+        }
+        self.restore_session(session);
+        true
+    }
+
+    fn restore_session(self: &Rc<Self>, session: tabs_session::RestoredSession) {
+        if session.tabs.is_empty() || self.blocked() {
+            return;
+        }
+        self.restoring.set(true);
+        self.active_browser()
+            .navigate_location(session.tabs[0].clone());
+        for location in session.tabs.iter().skip(1) {
+            self.add(Some(location.clone()));
+        }
+        self.select_index(session.active.min(session.tabs.len() - 1));
+        self.restoring.set(false);
     }
 
     fn handle_key(
@@ -470,12 +550,13 @@ impl TabWindow {
     }
 }
 
-fn operations_active(window: &gtk::ApplicationWindow) {
-    crate::ui::modal::show_error_dialog(
-        window,
-        "File operations are still active",
-        "Wait for these operations to finish, or cancel them before closing this tab or window. Cancellation does not undo completed changes.",
-    );
+fn operations_active() -> crate::ui::close_guard::CloseBlocker {
+    crate::ui::close_guard::CloseBlocker {
+        title: crate::i18n::tr("File operations are still active"),
+        detail: crate::i18n::tr(
+            "Wait for these operations to finish, or cancel them before closing this tab or window. Cancellation does not undo completed changes.",
+        ),
+    }
 }
 
 pub(in crate::ui::window) fn is_tab_shortcut(key: gdk::Key, modifiers: gdk::ModifierType) -> bool {

@@ -25,6 +25,40 @@ use crate::{
 };
 
 #[test]
+fn saved_language_applies_before_settings_and_changes_only_after_restart() {
+    gtk_test(
+        "ui::preferences::tests::preferences::saved_language_applies_before_settings_and_changes_only_after_restart",
+        || {
+            let mut preferences = non_default_preferences();
+            preferences.language = crate::i18n::Language::French;
+            fs::create_dir_all(settings_path().parent().expect("settings directory"))
+                .expect("create settings directory");
+            fs::write(
+                settings_path(),
+                toml::to_string(&preferences).expect("serialize settings"),
+            )
+            .expect("save fixture");
+            let manager = PreferenceManager::load();
+            assert_eq!(crate::i18n::tr("Language"), "Langue");
+            assert!(!manager.language_restart_required());
+            manager.set_language(crate::i18n::Language::Japanese);
+            assert!(manager.language_restart_required());
+            assert_eq!(crate::i18n::tr("Language"), "Langue");
+            assert_eq!(
+                read_preferences().expect("read saved language").language,
+                crate::i18n::Language::Japanese
+            );
+            manager.set_language(crate::i18n::Language::French);
+            assert!(!manager.language_restart_required());
+            manager.set_language(crate::i18n::Language::Japanese);
+            let restarted = PreferenceManager::load();
+            assert!(!restarted.language_restart_required());
+            assert_eq!(&*rust_i18n::locale(), "ja");
+        },
+    );
+}
+
+#[test]
 fn recent_sort_is_not_stored_as_an_ordinary_folder_default() {
     gtk_test(
         "ui::preferences::tests::preferences::recent_sort_is_not_stored_as_an_ordinary_folder_default",
@@ -58,10 +92,12 @@ fn older_preferences_keep_backward_compatible_behavior_defaults() {
     saved.remove("tenxer_mode");
     saved.remove("omarchy_variant");
     saved.remove("folder_peeking");
+    saved.remove("language");
     let restored: Preferences = saved.try_into().expect("backward-compatible preferences");
     assert_eq!(
         restored,
         Preferences {
+            language: crate::i18n::Language::Auto,
             filter_include_subfolders: true,
             open_folder_after_drop: false,
             date_format: "relative".into(),
@@ -213,6 +249,7 @@ fn unreadable_preferences_are_preserved_while_live_changes_still_apply() {
                 broken.extend_from_slice(suffix);
                 fs::write(settings_path(), &broken).expect("broken settings");
                 let manager = PreferenceManager::load();
+                let window = save_notice_window(&manager);
                 let anchors = [
                     gtk::Box::new(gtk::Orientation::Vertical, 0),
                     gtk::Box::new(gtk::Orientation::Vertical, 0),
@@ -229,11 +266,22 @@ fn unreadable_preferences_are_preserved_while_live_changes_still_apply() {
                     );
                     values
                 });
+                assert!(save_notices(&window).is_empty(), "nothing changed yet");
                 manager.set_folder_peeking(true);
                 manager.set_folder_peeking(true);
                 for values in observations {
                     assert_eq!(*values.borrow(), [false, true]);
                 }
+                let notices = save_notices(&window);
+                assert_eq!(notices.len(), 1, "{notices:?}");
+                assert_notice(
+                    &notices[0],
+                    "Settings file can't be read",
+                    &format!(
+                        "Strata couldn't read “{}” when it started:",
+                        settings_path().display()
+                    ),
+                );
                 assert_eq!(
                     fs::read(settings_path()).expect("preserved settings"),
                     broken
@@ -244,11 +292,15 @@ fn unreadable_preferences_are_preserved_while_live_changes_still_apply() {
                     fs::read(settings_path()).expect("repair left untouched"),
                     valid
                 );
+                assert_eq!(save_notices(&window).len(), 1, "one notice per session");
+                window.destroy();
                 drop(manager);
             }
             let manager = PreferenceManager::load();
+            let window = save_notice_window(&manager);
             assert_eq!(*manager.preferences.borrow(), non_default_preferences());
             manager.set_folder_peeking(false);
+            assert!(save_notices(&window).is_empty());
             assert!(
                 !read_preferences()
                     .expect("saving resumes after reload")
@@ -272,6 +324,188 @@ fn missing_settings_allow_first_run_saves() {
             manager.set_folder_peeking(false);
             assert!(!PreferenceManager::load().folder_peeking());
         },
+    );
+}
+
+#[test]
+fn symlinked_settings_save_through_to_the_target() {
+    gtk_test(
+        "ui::preferences::tests::preferences::symlinked_settings_save_through_to_the_target",
+        || {
+            seed_saved_preferences_for_test();
+            let config_home = std::env::var_os("XDG_CONFIG_HOME").expect("isolated config home");
+            let target = Path::new(&config_home)
+                .parent()
+                .expect("sandbox root")
+                .join("dotfiles/settings.toml");
+            fs::create_dir_all(target.parent().expect("dotfiles directory"))
+                .expect("dotfiles directory");
+            fs::rename(settings_path(), &target).expect("move settings into dotfiles");
+            std::os::unix::fs::symlink(&target, settings_path()).expect("dotfiles link");
+
+            let manager = PreferenceManager::load();
+            assert!(manager.folder_peeking());
+            manager.set_folder_peeking(false);
+
+            assert!(
+                !manager.persistence_dirty.get(),
+                "the save through the link must not stay pending"
+            );
+            assert!(
+                fs::symlink_metadata(settings_path())
+                    .expect("settings link")
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(
+                fs::read_link(settings_path()).expect("settings link"),
+                target
+            );
+            let saved: Preferences =
+                toml::from_str(&fs::read_to_string(&target).expect("dotfiles settings"))
+                    .expect("dotfiles settings parse");
+            assert!(!saved.folder_peeking);
+            drop(manager);
+            assert!(!PreferenceManager::load().folder_peeking());
+        },
+    );
+}
+
+#[test]
+fn failed_saves_show_one_notice_per_failure_streak() {
+    gtk_test(
+        "ui::preferences::tests::preferences::failed_saves_show_one_notice_per_failure_streak",
+        || {
+            let manager = PreferenceManager::load();
+            let window = save_notice_window(&manager);
+            fs::create_dir_all(settings_path()).expect("block the settings file with a directory");
+
+            let other = gtk::Window::new();
+            other.present();
+            wait_for(|| !window.is_active(), "another window to take focus");
+            manager.set_folder_peeking(true);
+            assert!(
+                save_notices(&window).is_empty(),
+                "a change while no browser window is active only logs"
+            );
+            other.destroy();
+            window.present();
+            wait_for(|| window.is_active(), "the notice window to become active");
+            manager.set_folder_peeking(true);
+            window.set_visible(false);
+            assert!(
+                save_notices(&window).is_empty(),
+                "a window hidden before the notice opens shows nothing"
+            );
+            window.present();
+            wait_for(|| window.is_active(), "the notice window to return");
+
+            manager.set_folder_peeking(true);
+            manager.set_type_to_search(!manager.type_to_search());
+            let notices = save_notices(&window);
+            assert_eq!(
+                notices.len(),
+                1,
+                "one notice per failure streak: {notices:?}"
+            );
+            assert_notice(
+                &notices[0],
+                "Settings can't be saved",
+                &format!(
+                    "Strata couldn't write “{path}”: The destination “{path}” is not a regular file.",
+                    path = settings_path().display()
+                ),
+            );
+
+            fs::remove_dir(settings_path()).expect("repair the settings file");
+            manager.set_folder_peeking(true);
+            assert!(read_preferences().expect("retried save").folder_peeking);
+            assert_eq!(save_notices(&window).len(), 1);
+
+            fs::remove_file(settings_path()).expect("saved settings file");
+            fs::create_dir(settings_path()).expect("block the settings file again");
+            manager.set_folder_peeking(false);
+            assert_eq!(
+                save_notices(&window).len(),
+                2,
+                "a failure after a successful save starts a new streak"
+            );
+            window.destroy();
+        },
+    );
+}
+
+#[derive(Debug)]
+struct SaveNoticeText {
+    title: String,
+    summary: String,
+    detail: String,
+}
+
+fn save_notice_window(manager: &PreferenceManager) -> gtk::Window {
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&gtk::Button::with_label("Origin")));
+    let window = gtk::Window::builder().child(&overlay).build();
+    window.present();
+    wait_for(|| window.is_active(), "the notice window to become active");
+    manager.register_save_notice_window(&window);
+    window
+}
+
+fn wait_for(condition: impl Fn() -> bool, what: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !condition() {
+        assert!(std::time::Instant::now() < deadline, "waiting for {what}");
+        glib::MainContext::default().iteration(false);
+    }
+}
+
+fn save_notices(window: &gtk::Window) -> Vec<SaveNoticeText> {
+    while glib::MainContext::default().iteration(false) {}
+    fn descendants(widget: &gtk::Widget, found: &mut Vec<gtk::Widget>) {
+        found.push(widget.clone());
+        let mut child = widget.first_child();
+        while let Some(current) = child {
+            descendants(&current, found);
+            child = current.next_sibling();
+        }
+    }
+    let mut widgets = Vec::new();
+    descendants(window.upcast_ref(), &mut widgets);
+    widgets
+        .iter()
+        .filter(|widget| widget.has_css_class("app-modal-layer"))
+        .map(|layer| {
+            let mut inner = Vec::new();
+            descendants(layer, &mut inner);
+            let text = |class: &str| {
+                inner
+                    .iter()
+                    .find(|widget| widget.has_css_class(class))
+                    .and_then(|widget| {
+                        widget
+                            .downcast_ref::<gtk::Label>()
+                            .map(|label| label.text())
+                    })
+                    .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .unwrap_or_default()
+            };
+            SaveNoticeText {
+                title: text("action-dialog-title"),
+                summary: text("action-dialog-subtitle"),
+                detail: text("action-dialog-description"),
+            }
+        })
+        .collect()
+}
+
+fn assert_notice(notice: &SaveNoticeText, title: &str, detail_start: &str) {
+    let compact = |text: &str| text.split_whitespace().collect::<String>();
+    assert_eq!(notice.title, title);
+    assert_eq!(notice.summary, "Changes last only until Strata closes");
+    assert!(
+        compact(&notice.detail).starts_with(&compact(detail_start)),
+        "{notice:?}"
     );
 }
 
@@ -330,6 +564,48 @@ fn multiple_invalid_preferences_do_not_block_later_valid_entries() {
                     ..non_default_preferences()
                 },
             );
+        },
+    );
+}
+
+#[test]
+fn unlisted_auto_refresh_intervals_round_up_on_load_and_set() {
+    gtk_test(
+        "ui::preferences::tests::preferences::unlisted_auto_refresh_intervals_round_up_on_load_and_set",
+        || {
+            for (stored, expected) in [
+                (0, 0),
+                (1, 60),
+                (59, 60),
+                (60, 60),
+                (61, 300),
+                (120, 300),
+                (601, 600),
+                (3600, 600),
+            ] {
+                assert_recovered_preferences_survive_save(
+                    |saved| {
+                        saved.insert("auto_refresh_interval".into(), i64::from(stored).into());
+                    },
+                    Preferences {
+                        auto_refresh_interval: expected,
+                        ..non_default_preferences()
+                    },
+                );
+            }
+
+            seed_saved_preferences_for_test();
+            let manager = PreferenceManager::shared();
+            for (requested, expected) in [(45, 60), (u32::MAX, 600), (300, 300), (0, 0)] {
+                manager.set_auto_refresh_interval(requested);
+                assert_eq!(manager.auto_refresh_interval(), expected);
+                assert_eq!(
+                    read_preferences()
+                        .expect("saved preferences")
+                        .auto_refresh_interval,
+                    expected
+                );
+            }
         },
     );
 }
@@ -402,6 +678,9 @@ fn every_saved_preference_loads_before_any_settings_page_exists() {
             assert!(manager.tenxer_mode());
             assert!(!manager.filter_include_subfolders());
             assert!(!manager.show_keybinding_hints());
+            assert!(!manager.window_show_close());
+            assert!(manager.window_show_minimize());
+            assert!(manager.window_show_maximize());
             assert!(manager.reduce_motion());
             assert!(!manager.element_glow());
             let windows = [gtk::Window::new(), gtk::Window::new()];
@@ -739,6 +1018,9 @@ fn all_preference_setters_publish_and_persist_without_duplicate_notifications() 
                 |m| m.set_tenxer_mode(false),
                 |m| m.set_filter_include_subfolders(true),
                 |m| m.set_show_keybinding_hints(true),
+                |m| m.set_window_show_close(true),
+                |m| m.set_window_show_minimize(false),
+                |m| m.set_window_show_maximize(false),
                 |m| m.set_reduce_motion(false),
                 |m| m.set_element_glow(true),
                 |m| m.set_omarchy_variant(OmarchyVariant::HighContrast),
@@ -780,6 +1062,7 @@ fn all_preference_setters_publish_and_persist_without_duplicate_notifications() 
                 |m| m.set_sort_preferences(ViewPreferences::default()),
                 |m| m.set_text_size(TextSize::new(11)),
                 |m| m.set_interface_renderer(InterfaceRenderer::System),
+                |m| m.set_language(crate::i18n::Language::Auto),
                 |m| m.set_checks_for_updates(true),
                 |m| m.set_release_channel(Channel::Stable),
                 |m| m.set_preview_muted(false),
@@ -796,6 +1079,7 @@ fn all_preference_setters_publish_and_persist_without_duplicate_notifications() 
                 |m| m.set_cross_volume_drop_strategy(CrossVolumeDropStrategy::Copy),
                 |m| m.set_date_format(crate::util::DateFormat::Long),
                 |m| m.set_default_directory(None),
+                |m| m.set_restore_tabs(true),
                 |m| m.set_device_label("volume:fixture-kingston", "Photos / 📁"),
                 |m| m.set_device_label("volume:fixture-kingston", ""),
                 |m| {

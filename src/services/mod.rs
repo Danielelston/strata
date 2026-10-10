@@ -15,6 +15,7 @@ mod mime_type;
 pub(crate) mod model_preview;
 mod native_fs;
 mod navigation_history;
+mod network_error;
 mod operations;
 pub(crate) mod package_manager;
 mod path_match;
@@ -37,12 +38,15 @@ pub(crate) use document::{
     DocumentSpanStyle, DocumentTableCellLayout, DocumentUnit, DocumentUnitKind, document_kind,
     has_web_scheme, layout_document, parse_document, parse_markdown,
 };
-pub(crate) use file_source::sanitize_failure_message;
 pub use file_source::{
     DirectoryChange, DirectoryEvent, DirectoryRequest, FileSource, LoadHandle,
     LocationValidationError, MetadataOutcome, MetadataRequest, MetadataUpdate, RequestId,
     UriCredentials, backend_unavailable_message, sanitize_uri_credentials,
     validate_uri_credentials,
+};
+pub(crate) use file_source::{
+    error_detail, gio_error_detail, gio_error_message, io_error_detail, io_error_message,
+    sanitize_failure_message,
 };
 pub use install_source::{InstallSource, ManagedInstall};
 pub(crate) use install_source::{ensure_self_managed, installed_executable};
@@ -54,7 +58,7 @@ pub use jobs::{
 pub(crate) use listeners::ListenerGuard;
 pub use mime_type::{
     BROKEN_LINK_TYPE_NAME, EntryType, FOLDER_TYPE_NAME, OTHER_TYPE_NAME, entry_type,
-    entry_type_description, mime_description_for_name,
+    mime_description_for_name,
 };
 pub(crate) use model_preview::ModelRender;
 pub use model_preview::{ModelFormat, ModelPalette};
@@ -93,7 +97,10 @@ pub(crate) use release_channel::{BuildKind, Channel, Version};
 pub(crate) use remote_download::{
     RemoteDownload, download_remote, prune_stale_downloads, remote_file_name, remote_file_url,
 };
-pub(crate) use search::{RESULT_LIMIT as SEARCH_RESULT_LIMIT, refresh_search_indexes_for_rename};
+pub(crate) use search::{
+    RESULT_LIMIT as SEARCH_RESULT_LIMIT, RenameScope, rebase_search_indexes,
+    refresh_search_indexes_for_directory, refresh_search_indexes_for_rename,
+};
 pub(crate) use search::{
     RefusedFolders, SearchCoverage, SearchEvent, SearchExclusions, SearchHandle, SearchItem,
     filter_name_matches, filter_query_allows_typos, fold_for_search, index_filter,

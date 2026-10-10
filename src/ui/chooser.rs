@@ -9,7 +9,7 @@ mod tests;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
@@ -124,13 +124,13 @@ impl FileSource for ChooserFileSource {
 
     fn validate_location(&self, location: &Location) -> Result<(), LocationValidationError> {
         if !self.allows_navigation(location) {
-            return Err(LocationValidationError::UnsupportedScheme(
-                "Choose an existing folder inside this removable device.".into(),
+            return Err(LocationValidationError::Refused(
+                "Choose an existing folder inside this removable device.",
             ));
         }
         if location.native_path().is_none() && !location.is_recent_root() {
-            return Err(LocationValidationError::UnsupportedScheme(
-                "The system file chooser supports local files and folders only.".into(),
+            return Err(LocationValidationError::Refused(
+                "The system file chooser supports local files and folders only.",
             ));
         }
         self.source.validate_location(location)
@@ -475,6 +475,9 @@ struct ChooserState {
     filename: Option<gtk::Entry>,
     filename_selection: RefCell<Vec<Location>>,
     filename_edited: Cell<bool>,
+    /// Exact bytes of the filesystem name last copied into `filename`; the entry
+    /// itself holds only the lossy UTF-8 rendering.
+    filename_source: RefCell<Option<OsString>>,
     filter_dropdown: Option<ChooserDropdown>,
     filters: Vec<PortalFilter>,
     choices: Vec<ChoiceControl>,
@@ -518,7 +521,9 @@ impl ChooserState {
                 ..
             }
         ) {
-            self.show_error("Remote links are only supported when opening files");
+            self.show_error(&crate::i18n::tr(
+                "Remote links are only supported when opening files",
+            ));
             return;
         }
         if self.completion.borrow().is_none() || visible_modal_layer(&self.window).is_some() {
@@ -604,7 +609,9 @@ impl ChooserState {
                         state.dismiss_download_progress();
                         state.accept_button.set_sensitive(true);
                         state.download_cancel.borrow_mut().take();
-                        state.show_error("The download stopped unexpectedly. Try again.");
+                        state.show_error(&crate::i18n::tr(
+                            "The download stopped unexpectedly. Try again.",
+                        ));
                         break glib::ControlFlow::Break;
                     }
                 }
@@ -657,7 +664,9 @@ impl ChooserState {
         };
         if !self.view.browser().allows_entry(&entry) {
             self.accept_button.set_sensitive(true);
-            self.show_error("The file does not match the selected filter");
+            self.show_error(&crate::i18n::tr(
+                "The file does not match the selected filter",
+            ));
             return;
         }
         self.complete_paths(
@@ -752,6 +761,24 @@ impl ChooserState {
         self.chosen_entries(true)
     }
 
+    fn fill_filename(&self, filename: &gtk::Entry, name: &OsStr) {
+        filename.set_text(&name.to_string_lossy());
+        self.filename_source.replace(Some(name.to_owned()));
+    }
+
+    fn clear_filename(&self, filename: &gtk::Entry) {
+        filename.set_text("");
+        self.filename_source.replace(None);
+        self.filename_edited.set(false);
+    }
+
+    fn save_destination_name(&self, text: &str) -> OsString {
+        match self.filename_source.borrow().as_deref() {
+            Some(source) if source.to_string_lossy() == text => source.to_owned(),
+            _ => OsString::from(text),
+        }
+    }
+
     fn update_selected_filename(&self) {
         let Some(filename) = self.filename.as_ref() else {
             return;
@@ -773,7 +800,7 @@ impl ChooserState {
             && let Some(name) = entry.location.native_path().and_then(Path::file_name)
             && safe_filename(name)
         {
-            filename.set_text(&name.to_string_lossy());
+            self.fill_filename(filename, name);
             self.filename_edited.set(false);
             filename.remove_css_class("error");
             crate::ui::accessibility::set_description(filename, None);
@@ -784,8 +811,7 @@ impl ChooserState {
                 ..
             }
         ) {
-            filename.set_text("");
-            self.filename_edited.set(false);
+            self.clear_filename(filename);
         }
     }
 
@@ -881,7 +907,7 @@ impl ChooserState {
                 }
                 let browser = self.view.browser();
                 let Some(current) = browser.active_location() else {
-                    self.show_error("Choose an accessible local folder");
+                    self.show_error(&crate::i18n::tr("Choose an accessible local folder"));
                     return;
                 };
                 let entries = self.chosen_entries(!*directory);
@@ -903,7 +929,7 @@ impl ChooserState {
                             .as_ref()
                             .map(|read_only| writable_from_read_only(read_only.is_active())),
                     ),
-                    (Err(message), _) => self.show_error(message),
+                    (Err(message), _) => self.show_error(&crate::i18n::tr(message)),
                 }
             }
             ChooserKind::SaveFile { .. } => self.accept_save_file(),
@@ -911,7 +937,7 @@ impl ChooserState {
                 let folder = match self.active_folder() {
                     Ok(folder) => folder,
                     Err(message) => {
-                        self.show_error(message);
+                        self.show_error(&crate::i18n::tr(message));
                         return;
                     }
                 };
@@ -926,7 +952,7 @@ impl ChooserState {
             return;
         }
         if let Err(message) = crate::services::validate_basename(name) {
-            self.show_error(message);
+            self.show_error(&crate::i18n::tr(message));
             return;
         }
         let folder = self
@@ -936,7 +962,7 @@ impl ChooserState {
             .and_then(|location| location.native_path().map(Path::to_path_buf))
             .or_else(|| self.active_folder().ok());
         let Some(folder) = folder else {
-            self.show_error("Choose an accessible local folder");
+            self.show_error(&crate::i18n::tr("Choose an accessible local folder"));
             return;
         };
         let location = Location::local(folder.join(name));
@@ -958,18 +984,20 @@ impl ChooserState {
                 Ok(entry) if entry.is_directory() => {
                     state.view.browser().navigate(entry.location);
                     if let Some(filename) = state.filename.as_ref() {
-                        filename.set_text("");
-                        state.filename_edited.set(false);
+                        state.clear_filename(filename);
                     }
                 }
                 Ok(entry) if state.view.browser().allows_entry(&entry) => {
                     match entry.location.native_path() {
                         Some(path) => state.finish_remote(path.to_path_buf()),
-                        None => state.show_error("Choose an existing, accessible file"),
+                        None => state
+                            .show_error(&crate::i18n::tr("Choose an existing, accessible file")),
                     }
                 }
-                Ok(_) => state.show_error("The file does not match the selected filter"),
-                Err(_) => state.show_error("Choose an existing, accessible file"),
+                Ok(_) => state.show_error(&crate::i18n::tr(
+                    "The file does not match the selected filter",
+                )),
+                Err(_) => state.show_error(&crate::i18n::tr("Choose an existing, accessible file")),
             }
         });
     }
@@ -980,9 +1008,10 @@ impl ChooserState {
         };
         let name = filename.text().to_string();
         if let Err(message) = crate::services::validate_basename(&name) {
+            let message = crate::i18n::tr(message);
             filename.add_css_class("error");
-            crate::ui::accessibility::set_description(filename, Some(message));
-            self.show_error(message);
+            crate::ui::accessibility::set_description(filename, Some(&message));
+            self.show_error(&message);
             filename.grab_focus();
             return;
         }
@@ -991,16 +1020,11 @@ impl ChooserState {
         let folder = match self.active_folder() {
             Ok(folder) => folder,
             Err(message) => {
-                self.show_error(message);
+                self.show_error(&crate::i18n::tr(message));
                 return;
             }
         };
-        let name = match &self.request.kind {
-            ChooserKind::SaveFile {
-                current_name: Some(current),
-            } if current.to_string_lossy() == name => current.clone(),
-            _ => OsString::from(name),
-        };
+        let name = self.save_destination_name(&name);
         self.accept_destinations(folder, vec![name]);
     }
 
@@ -1048,32 +1072,32 @@ impl ChooserState {
         if let Some(root) = root.as_ref() {
             root.set_blurred(true);
         }
-        let names = paths
-            .iter()
-            .take(3)
-            .filter_map(|path| path.file_name())
-            .map(|name| name.to_string_lossy().chars().take(80).collect::<String>())
-            .collect::<Vec<_>>()
-            .join(", ");
+        let names = crate::i18n::list(
+            paths
+                .iter()
+                .take(3)
+                .filter_map(|path| path.file_name())
+                .map(|name| name.to_string_lossy().chars().take(80).collect::<String>()),
+        );
         let layout = message_dialog_layout(
             crate::assets::icons::COPY,
-            if paths.len() > 1 {
+            &crate::i18n::tr(if paths.len() > 1 {
                 "Replace existing files?"
             } else {
                 "Replace existing file?"
-            },
+            }),
             &names,
-            "Replace",
+            &crate::i18n::tr("Replace"),
             ModalTone::Danger,
         );
         layout
             .body
             .append(&super::controls::message_dialog_description(
-                if paths.len() > 1 {
+                &crate::i18n::tr(if paths.len() > 1 {
                     "One or more destination files already exist. Continuing may overwrite them."
                 } else {
                     "The destination file already exists. Continuing may overwrite it."
-                },
+                }),
             ));
         let layer = modal_layer(&layout.content, &overlay, root.clone(), None);
         overlay.add_overlay(&layer);
@@ -1116,7 +1140,7 @@ impl ChooserState {
                 ..
             }
         ) {
-            self.show_error("Choose folders only");
+            self.show_error(&crate::i18n::tr("Choose folders only"));
             return;
         }
         if matches!(
@@ -1156,7 +1180,7 @@ impl ChooserState {
                 directory: false, ..
             } => {
                 let Some(path) = location.native_path() else {
-                    self.show_error("Choose a local file");
+                    self.show_error(&crate::i18n::tr("Choose a local file"));
                     return;
                 };
                 self.complete_paths(
@@ -1176,7 +1200,7 @@ impl ChooserState {
                     return;
                 };
                 if let Some(filename) = self.filename.as_ref() {
-                    filename.set_text(&name.to_string_lossy());
+                    self.fill_filename(filename, &name);
                 }
                 self.accept_destinations(folder, vec![name]);
             }
@@ -1489,7 +1513,7 @@ fn build_chooser_hosted(
     header.set_show_title_buttons(false);
     let sidebar_toggle = gtk::ToggleButton::builder()
         .active(true)
-        .tooltip_text("Toggle sidebar (Ctrl+B)")
+        .tooltip_text(crate::i18n::tr("Toggle sidebar (Ctrl+B)"))
         .build();
     sidebar_toggle.set_child(Some(&crate::assets::primary_icon(
         crate::assets::icons::PANEL_LEFT,
@@ -1506,7 +1530,7 @@ fn build_chooser_hosted(
     header_content.append(&sidebar_toggle);
     header_content.append(&location);
     let close = gtk::Button::builder()
-        .tooltip_text("Cancel file selection (Esc)")
+        .tooltip_text(crate::i18n::tr("Cancel file selection (Esc)"))
         .build();
     close.set_child(Some(&crate::assets::chrome_icon(crate::assets::icons::X)));
     close.add_css_class("header-action");
@@ -1566,10 +1590,10 @@ fn build_chooser_hosted(
     details.add_css_class("chooser-details");
     let filename = match &request.kind {
         ChooserKind::SaveFile { current_name } => {
-            let row = labeled_row("Name", None::<&gtk::Widget>);
+            let row = labeled_row(&crate::i18n::tr("Name"), None::<&gtk::Widget>);
             let entry = form_entry();
             entry.set_hexpand(true);
-            entry.set_placeholder_text(Some("Enter a filename"));
+            entry.set_placeholder_text(Some(&crate::i18n::tr("Enter a filename")));
             if let Some(name) = current_name {
                 entry.set_text(&name.to_string_lossy());
                 entry.select_region(0, -1);
@@ -1579,27 +1603,24 @@ fn build_chooser_hosted(
             Some(entry)
         }
         ChooserKind::SaveFiles { names } => {
-            let names = names
-                .iter()
-                .map(|name| name.to_string_lossy())
-                .collect::<Vec<_>>()
-                .join(", ");
+            let names =
+                crate::i18n::list(names.iter().map(|name| name.to_string_lossy().into_owned()));
             let label = gtk::Label::new(Some(&names));
             label.add_css_class("action-dialog-description");
             label.set_xalign(0.0);
             label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
             crate::ui::accessibility::set_description(&label, Some(&names));
-            let row = labeled_row("Files", Some(label.upcast_ref()));
+            let row = labeled_row(&crate::i18n::tr("Files"), Some(label.upcast_ref()));
             details.append(&row);
             None
         }
         ChooserKind::Open {
             directory: false, ..
         } => {
-            let row = labeled_row("Name", None::<&gtk::Widget>);
+            let row = labeled_row(&crate::i18n::tr("Name"), None::<&gtk::Widget>);
             let entry = form_entry();
             entry.set_hexpand(true);
-            entry.set_placeholder_text(Some("Enter a filename or https:// URL"));
+            entry.set_placeholder_text(Some(&crate::i18n::tr("Enter a filename or https:// URL")));
             row.append(&entry);
             details.append(&row);
             Some(entry)
@@ -1619,7 +1640,10 @@ fn build_chooser_hosted(
             .map(|filter| filter.portal.label())
             .collect::<Vec<_>>();
         let dropdown = ChooserDropdown::new(&labels, selected_filter.unwrap_or(0));
-        let row = labeled_row("Filter", Some(dropdown.button.upcast_ref()));
+        let row = labeled_row(
+            &crate::i18n::tr("chooser.filter"),
+            Some(dropdown.button.upcast_ref()),
+        );
         append_option(&options, &row);
         let filters_for_change = filters.clone();
         let source_for_change = source.clone();
@@ -1644,7 +1668,7 @@ fn build_chooser_hosted(
         }
     )
     .then(|| {
-        let check = form_check_button("Open files read-only");
+        let check = form_check_button(&crate::i18n::tr("Open files read-only"));
         append_option(&options, &check);
         check
     });
@@ -1658,7 +1682,7 @@ fn build_chooser_hosted(
     error.add_css_class("form-field-error");
     error.set_visible(false);
 
-    let cancel = gtk::Button::with_label("Cancel");
+    let cancel = gtk::Button::with_label(&crate::i18n::tr("Cancel"));
     cancel.add_css_class("action-dialog-cancel");
     let accept = gtk::Button::with_mnemonic(&request.accept_label);
     accept.add_css_class("action-dialog-confirm");
@@ -1669,7 +1693,10 @@ fn build_chooser_hosted(
             ..
         }
     ) {
-        crate::ui::accessibility::set_description(&accept, Some("Select folder (Ctrl+Enter)"));
+        crate::ui::accessibility::set_description(
+            &accept,
+            Some(&crate::i18n::tr("Select folder (Ctrl+Enter)")),
+        );
     }
     let actions = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     actions.add_css_class("chooser-actions");
@@ -1718,8 +1745,13 @@ fn build_chooser_hosted(
     window.set_child(Some(&overlay));
     view.install_inline_edit_dismissal(&window);
     install_modal_focus_trap(&window);
+    view.set_as_modal_focus_fallback(&window);
     window.set_default_widget(Some(&accept));
 
+    let filename_source = match &request.kind {
+        ChooserKind::SaveFile { current_name } => current_name.clone(),
+        _ => None,
+    };
     let state = Rc::new(ChooserState {
         request,
         window: window.clone(),
@@ -1728,6 +1760,7 @@ fn build_chooser_hosted(
         filename: filename.clone(),
         filename_selection: RefCell::new(Vec::new()),
         filename_edited: Cell::new(false),
+        filename_source: RefCell::new(filename_source),
         filter_dropdown,
         filters,
         choices,
@@ -2076,7 +2109,7 @@ fn save_hints(kind: &ChooserKind, preferences: &Rc<PreferenceManager>) -> Option
         if index > 0 {
             keycap.set_margin_start(10);
         }
-        let label = gtk::Label::new(Some(action));
+        let label = gtk::Label::new(Some(&crate::i18n::tr(action)));
         label.add_css_class("shortcut-footer-chord-hint");
         row.append(&keycap);
         row.append(&label);
@@ -2545,6 +2578,15 @@ fn install_shortcuts(
             popover.child_focus(direction);
             return glib::Propagation::Stop;
         }
+        if !preferences.tenxer_mode()
+            && let Some(direction) = super::focus_navigation::plain_tab_direction(key, modifiers)
+            && !focused
+                .as_ref()
+                .is_some_and(super::focus_navigation::in_popover)
+            && state.view.default_tab(direction)
+        {
+            return glib::Propagation::Stop;
+        }
         if preferences.tenxer_mode()
             && super::focus_navigation::plain_tab_direction(key, modifiers).is_some()
             && let Some(filename) = state.filename.as_ref()
@@ -2811,7 +2853,9 @@ fn install_shortcuts(
                 browser.enter_focused_directory();
             }
             (gtk::gdk::Key::l | gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter, false) => {
-                state.view.activate_focused()
+                if !tenxer.confirm_focused() {
+                    state.view.activate_focused();
+                }
             }
             _ => return glib::Propagation::Proceed,
         }

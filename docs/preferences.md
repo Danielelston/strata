@@ -4,6 +4,12 @@ Application-wide preferences live in `ui::preferences::Preferences`. The
 `ui::preferences::PreferenceManager` loads them once per application process and
 persists changes atomically to
 `$XDG_CONFIG_HOME/strata/settings.toml` (normally `~/.config/strata/settings.toml`).
+The file may be a symlink, for example into a dotfiles repository: Strata follows
+up to eight links owned by the current user to a regular file the user owns,
+replaces that target atomically in its own directory, keeps its permission bits
+and leaves the links in place. Links owned by another user, links to directories
+or missing targets, and longer chains are refused. A missing file is created
+with owner-only permissions; an existing one keeps its permission bits.
 It owns the serialized schema, change notifications, and widget bindings for every
 settings consumer, theme-related or not. `ui::theme::ThemeManager` separately owns
 the theme catalog, shared CSS application, custom themes, and Omarchy following;
@@ -33,11 +39,21 @@ current value immediately, then applies only
 changes to its selected value. There is no separate startup initializer to keep
 in sync with the change handler. Every setter goes through `save_preferences`,
 which deduplicates unchanged preferences and publishes changes through the same
-notification mechanism. Failed writes are logged, still apply in memory, and
-are retried on the next save attempt. If an existing settings file cannot be read
+notification mechanism. Failed writes are logged with the path and reason, still
+apply in memory, and are retried on the next save, so a transient failure such as
+a full disk recovers once its cause is fixed. The first failure also opens a
+"Settings can't be saved" dialog with the path and reason, saying that changes
+last only until Strata closes. It appears once per failure streak, in the active
+browser window where the change was made, and again only after a save has
+succeeded and then failed. A failure while no browser window is active, such as
+a background Omarchy theme update, is only logged and leaves the notice for the
+next failure. If an existing settings file cannot be read
 or parsed as TOML, startup logs a warning and uses temporary defaults. Preference
 changes still apply in memory, but saving is disabled for that manager's lifetime
-to preserve the original file. Fix the file and restart Strata to resume saving.
+to preserve the original file. The first change made in a browser window then
+opens a "Settings file can't be read" dialog instead, once. Fix the file and restart
+Strata to resume saving. Portal file choosers never show these dialogs; their
+failures are only logged.
 Missing files allow normal first-run saves; invalid values in otherwise valid
 TOML still use the existing per-entry recovery.
 
@@ -58,7 +74,7 @@ control that might be midway through synchronization.
 | Stored preferences | Consumer / application point |
 | --- | --- |
 | Default directory | New windows without an explicit target read the current choice before navigating, without opening Settings. Existing windows and explicit targets are unchanged. Missing directories fall back to home and clear the saved choice; Reset also restores home. |
-| Folder peeking, single-click previews, columns selection mirror, mode, density, grouping, per-mode click counts, auto-refresh | Every browser binds at construction, including lazily rebuilt view modes. Miller columns disallow folder-peek popovers regardless of the saved value; Icons and List retain the preference. The chooser explicitly disallows folder peeking and the columns selection mirror regardless of the saved values. |
+| Folder peeking, single-click previews, columns selection mirror, mode, density, grouping, per-mode click counts, auto-refresh | Every browser binds at construction, including lazily rebuilt view modes. Miller columns disallow folder-peek popovers regardless of the saved value; Icons and List retain the preference. The chooser explicitly disallows folder peeking and the columns selection mirror regardless of the saved values. Auto-refresh accepts only the Settings choices (Off, 1, 5 or 10 min); an unlisted saved interval is rounded up to the next choice (capped at 10 min) when loaded or set, and the repaired value is written on the next save. |
 | Hidden files | Shared across existing browsers and new columns. |
 | Open folder after dropping files | Drop dispatch reads the saved choice (off by default), including confirmation of cross-device drops. Successful drops reveal the destination only when enabled and the user is still at the transfer origin. Paste and Move/Copy to remain unchanged. |
 | Cross-device drag and drop | Drop dispatch reads the current Copy, Move, or Ask strategy; unresolved volume lookups follow the same cross-device policy. |
@@ -70,6 +86,7 @@ control that might be midway through synchronization.
 | Element glow | Shared semantic glow color is applied by `ThemeManager` when the appearance preferences change, before Settings opens and live across windows, dialogs, menus, and rebuilt views. Focus outlines and ordinary depth shadows are preserved. The video preview's ambient light, and the band it needs around the frame, follow the same switch live. |
 | Reduced motion | Set before any window is constructed; animation helpers read the current process-wide value. |
 | Theme, Omarchy following/variant, text size | `ThemeManager` applies shared CSS when theme selection, Omarchy following, Omarchy variant, text size, or element glow change; controls and theme-card selections bind to preferences through `ThemeManager::bind_theme_preference`. Newly saved custom themes appear in other open theme pages. Missing themes/Omarchy use the existing fallback policy. |
+| Language | Initialized before application UI from the saved manual language or system locale priorities. The selection and Restart button synchronize across Settings windows, but the running interface keeps its startup language until a full restart. This deliberate restart-to-apply exception avoids rebuilding active browsers, dialogs, and operations. |
 | Interface renderer | GTK selects the renderer at process startup. The saved GTK default or Cairo choice is read before GTK initializes; GTK default is selected for new installs. The control and Restart button synchronize across Settings windows, but changes take effect only after restarting Strata (via the button or after fully quitting and reopening). An explicit `GSK_RENDERER` always overrides the saved choice. |
 | Keybinding hints | Navigation hints and the shortcuts button bind immediately and live. When hidden, the status bar appears only while the clipboard badge or F1 reference needs it; otherwise the empty bar is hidden. |
 | Thumbnail workers | Browser construction binds the shared decoder limit before Settings opens. Changes apply across windows and rebuilt views; lowering the limit lets active work finish and retires excess idle supervisors. |
@@ -88,8 +105,12 @@ control that might be midway through synchronization.
 | Folder colors/custom icons | Icon resolution reads the manager; existing customization refreshes notify rendered icons, including local sidebar folders, customization previews, and Properties. Sidebar folder icons retain their customization in collapsed mode and across row rebuilds. Local sidebar folders expose the shared Customize action. |
 | Device display labels | `device_labels` stores Strata-only labels by filesystem UUID, with mount URI fallback when a UUID is unavailable. Sidebar device rows and Properties bind at construction, update across open windows, and reapply on row rebuilds. Set label… edits the label; blank restores the system-provided name. Filesystem labels, mount/boot configuration, and other applications remain unchanged. Label editors retain their local draft while their Save action follows the latest shared value. Send-to menus and destructive Format confirmations retain system-provided drive names. No Settings page is required. |
 | Recent Send-to destinations | `send_to_recent_destinations` stores up to three relative directory paths per stable removable-device ID. The selection menu validates them against the device's current canonical root when opened and again when activated; no Settings control is exposed. |
+| Restore open tabs | Plain launches reopen the previous tabs in strip order with the previously active tab selected, when the Startup toggle is on (the default). Explicit folder arguments, reveal requests, and unlock flows bypass restore. Toggle it under General → Startup; the toggle binds live across Settings windows. |
+| Window buttons (minimize, maximize, close) | Every window header binds at construction and updates live. Minimize and maximize are hidden by default; close is shown. The maximize button also restores a maximized window. |
 
-Location, selection, history, each column's sort, filter query, transient theme
+Tab locations persist in a separate session store (`$XDG_CONFIG_HOME/strata/tabs.toml`),
+saved whenever tabs change and validated on load. Selection, history, each column's
+sort, filter query, transient theme
 catalog filters, dialogs, and preview playback position remain window-local.
 Pinned places, portal integration and other externally managed state have their
 own stores and are not fields in the application preferences schema. Udiskie
@@ -169,6 +190,36 @@ Omarchy changes themes. It is remembered but inactive when following is off.
 Missing or invalid saved values fall back to Original without resetting other
 preferences.
 
+## Language
+
+**Settings → General → Language** offers **Auto-detect** (the default) and
+English, French, German, Spanish, Japanese, Brazilian Portuguese, Korean,
+Vietnamese, Italian, and Russian. Language names use their native spelling so
+the selector remains recognizable after an accidental choice. Save a manual
+choice as `language = "fr"`, for example, or `language = "auto"` to follow the
+system again. Missing and unknown language values recover to Auto-detect.
+
+Changes are saved immediately and synchronize across Settings windows. Use
+**Restart now**, or fully quit all Strata windows and reopen it, to apply the
+new language. Until then, existing and newly opened application UI retains the
+startup language. Changing language never rebuilds an active browser or resets
+its navigation, selection, filters, or ongoing operations.
+
+Auto-detect reads the colon-separated GNU `LANGUAGE` priority list, then the
+message locale selected by the first nonempty `LC_ALL`, `LC_MESSAGES`, or `LANG`.
+An explicit `C` or `POSIX` message locale means English and suppresses
+`LANGUAGE`. Encoding and modifier suffixes are ignored; regional variants use
+the supported base language (all Portuguese variants use Brazilian Portuguese).
+Unsupported languages fall back to English. Strata does not modify the desktop
+locale or the environment inherited by launched programs. System/provider error
+messages, externally supplied content, and toolkit-owned strings can therefore
+remain in the system language. Filenames, paths, user-defined names, scripts,
+and protocol identifiers are not translated.
+
+Translations are compiled into the binary with `rust-i18n`; installing system
+locale packages is not required. See [Internationalization](internationalization.md)
+for catalog and contributor guidance.
+
 ## Interface renderer
 
 **Settings → Appearance → Rendering** offers **GTK default** (initial choice) and **Cairo**.
@@ -247,6 +298,10 @@ on by default. Turn it off to match only immediate files and folders, without
 redundant path subtitles. The choice applies to pane filtering in Columns, Icons,
 and List views, not global search.
 Changing it refreshes active filters across windows and is saved for next launch.
+With it on, changes that other programs make in subfolders of the watched folders
+reach active filters on F5, Auto-refresh, or when the filter is opened again; changes
+in a watched folder show within about a second (see
+[Filename patterns while filtering](keyboard-navigation.md#filename-patterns-while-filtering)).
 [10xer mode](10xer-mode.md) does not use it: there **f** filters only the
 current folder and **s** always searches below it.
 
@@ -301,6 +356,6 @@ and Icons. See
    Test both directions; a test that only saves and deserializes is insufficient.
 
 The regression suites also check no writes from opening Settings, no duplicate
-notifications, reentrant changes, listener cleanup, failed-write retries,
-chooser overrides, type-to-search keyboard behavior, and synchronized media
-controls. Run GTK tests on the private display described in `e2e-testing.md`.
+notifications, reentrant changes, listener cleanup, failed-write retries and
+notices, symlinked settings files, chooser overrides, type-to-search keyboard
+behavior, and synchronized media controls. Run GTK tests on the private display described in `e2e-testing.md`.

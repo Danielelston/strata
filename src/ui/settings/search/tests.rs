@@ -4,6 +4,47 @@ use super::*;
 use crate::ui::{blur::BlurBin, preferences::PreferenceManager};
 
 #[test]
+fn localized_setting_titles_keep_stable_search_targets() {
+    crate::test_support::gtk_test(
+        "ui::settings::search::tests::localized_setting_titles_keep_stable_search_targets",
+        || {
+            for (locale, query) in [
+                ("fr", "Langue"),
+                ("de", "Sprache"),
+                ("ja", "言語"),
+                ("ko", "언어"),
+                ("ru", "Язык"),
+            ] {
+                rust_i18n::set_locale(locale);
+                for query in [query, "Language"] {
+                    let matches = find_matches(&normalized(query));
+                    assert_eq!(matches.best_page, Some("general"), "{locale}: {query}");
+                    assert!(matches.ids.contains("language"));
+                }
+            }
+            rust_i18n::set_locale("de");
+            for (query, id) in [
+                ("10xer", "tenxer"),
+                ("Modus", "tenxer"),
+                ("Doppelklick", "opening"),
+                ("double click", "opening"),
+            ] {
+                assert!(
+                    find_matches(&normalized(query)).ids.contains(id),
+                    "de: {query}"
+                );
+            }
+            rust_i18n::set_locale("ja");
+            assert!(
+                find_matches(&normalized("ダブルクリック"))
+                    .ids
+                    .contains("opening")
+            );
+        },
+    );
+}
+
+#[test]
 fn ranks_exact_labels_aliases_and_small_typing_errors() {
     for (query, page, id) in [
         ("Folder peeking", "general", "peeking"),
@@ -105,6 +146,16 @@ fn global_search_navigates_filters_lazy_pages_and_restores_without_editing_prefe
             assert_eq!(stack.visible_child_name().as_deref(), Some("general"));
             assert!(item(layer.upcast_ref(), "preview-autoplay").is_visible());
             assert!(!item(layer.upcast_ref(), "peeking").is_visible());
+            entry.set_text("window buttons");
+            assert_eq!(stack.visible_child_name().as_deref(), Some("general"));
+            for id in ["window-minimize", "window-maximize", "window-close"] {
+                assert!(item(layer.upcast_ref(), id).is_visible());
+            }
+            assert!(!item(layer.upcast_ref(), "previews").is_visible());
+            entry.set_text("restore");
+            assert!(item(layer.upcast_ref(), "window-maximize").is_visible());
+            assert!(!item(layer.upcast_ref(), "window-minimize").is_visible());
+            assert!(!item(layer.upcast_ref(), "window-close").is_visible());
             entry.set_text("tezt size");
             assert_eq!(stack.visible_child_name().as_deref(), Some("theme"));
             assert!(item(layer.upcast_ref(), "text").is_visible());

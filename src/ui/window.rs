@@ -179,7 +179,7 @@ fn mouse_history_action(button: u32) -> Option<MouseHistoryAction> {
 }
 
 pub fn present(application: &gtk::Application) {
-    present_target(application, None, Vec::new(), false, true);
+    present_target(application, None, Vec::new(), false, true, true);
 }
 
 /// Opens the requested directory with the named items selected.
@@ -190,6 +190,7 @@ pub fn present_reveal(application: &gtk::Application, request: RevealRequest) {
         request.selection,
         request.properties,
         true,
+        false,
     );
 }
 
@@ -226,6 +227,7 @@ pub(super) fn present_target(
     selection: Vec<Location>,
     properties: bool,
     auto_navigate: bool,
+    restore_tabs: bool,
 ) -> BrowserView {
     let present_started = std::time::Instant::now();
     crate::assets::register_icon_theme();
@@ -244,16 +246,22 @@ pub(super) fn present_target(
         .default_height(760)
         .build();
 
-    let tabs = composition::TabWindow::new(&window, &preference_manager);
+    let tabs = composition::TabWindow::new(&window, &preference_manager, restore_tabs);
     let browser = tabs.active_browser();
     window.present();
     crate::metrics::mark_window_presented();
     if auto_navigate {
+        let restore = restore_tabs && location.is_none();
         let pending_location = location.unwrap_or_else(|| startup_location(&preference_manager));
         let idle_browser = browser.clone();
         glib::idle_add_local_once(move || {
             let started = std::time::Instant::now();
-            if selection.is_empty() {
+            if restore && tabs.try_restore() {
+                tracing::debug!(
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "present tab session restored"
+                );
+            } else if selection.is_empty() {
                 idle_browser.navigate_location(pending_location);
             } else {
                 idle_browser.reveal_locations(pending_location, selection, properties);
@@ -481,6 +489,8 @@ pub(super) fn is_browser_navigation_key(
             | gtk::gdk::Key::Right
             | gtk::gdk::Key::Home
             | gtk::gdk::Key::End
+            | gtk::gdk::Key::KP_Home
+            | gtk::gdk::Key::KP_End
             | gtk::gdk::Key::Page_Up
             | gtk::gdk::Key::Page_Down
             | gtk::gdk::Key::KP_Page_Up
@@ -497,6 +507,14 @@ fn page_direction(key: gtk::gdk::Key) -> Option<i32> {
     match key {
         gtk::gdk::Key::Page_Up | gtk::gdk::Key::KP_Page_Up => Some(-1),
         gtk::gdk::Key::Page_Down | gtk::gdk::Key::KP_Page_Down => Some(1),
+        _ => None,
+    }
+}
+
+fn home_end_direction(key: gtk::gdk::Key) -> Option<i32> {
+    match key {
+        gtk::gdk::Key::Home | gtk::gdk::Key::KP_Home => Some(-1),
+        gtk::gdk::Key::End | gtk::gdk::Key::KP_End => Some(1),
         _ => None,
     }
 }
@@ -762,14 +780,14 @@ pub(super) fn build_appearance_menu(
     popover.add_css_class("appearance-popover");
     super::scrolling::popover::dismiss_on_outside_scroll(&popover);
     let button = gtk::MenuButton::builder()
-        .tooltip_text("Appearance")
+        .tooltip_text(crate::i18n::tr("Appearance"))
         .popover(&popover)
         .build();
     // Without an explicit name GTK builds one from the whole open popover, so
     // a screen reader reads the entire menu back as the button's label.
-    super::accessibility::set_label(&button, "Appearance");
+    super::accessibility::set_label(&button, &crate::i18n::tr("Appearance"));
     let popover_weak = popover.downgrade();
-    append_menu_heading(&content, "VIEW");
+    append_menu_heading(&content, &crate::i18n::tr("VIEW"));
     let current_mode = view.view_mode();
     let button_icon = crate::assets::chrome_icon(browser_mode_icon(current_mode));
     let (columns, columns_check, _) = appearance_option(
@@ -777,18 +795,21 @@ pub(super) fn build_appearance_menu(
         "Columns",
         current_mode == BrowserMode::Columns,
         true,
+        gtk::AccessibleRole::MenuItemRadio,
     );
     let (icons, icons_check, _) = appearance_option(
         crate::assets::icons::ICONS,
         "Icons",
         current_mode == BrowserMode::Icons,
         true,
+        gtk::AccessibleRole::MenuItemRadio,
     );
     let (list, list_check, _) = appearance_option(
         crate::assets::icons::LIST,
         "List",
         current_mode == BrowserMode::List,
         true,
+        gtk::AccessibleRole::MenuItemRadio,
     );
     let grouped = preferences.group_by_type();
     let (group_by_type, group_check, _) = appearance_option(
@@ -796,10 +817,13 @@ pub(super) fn build_appearance_menu(
         "Group by file type",
         grouped,
         current_mode.supports_type_grouping(),
+        gtk::AccessibleRole::MenuItemCheckbox,
     );
     crate::ui::accessibility::set_description(
         &group_by_type,
-        Some("Group List entries under file-type headings"),
+        Some(&crate::i18n::tr(
+            "Group List entries under file-type headings",
+        )),
     );
     preferences.bind_preference(
         &group_check,
@@ -832,8 +856,12 @@ pub(super) fn build_appearance_menu(
             if let Some(popover) = popover_weak.upgrade() {
                 popover.popdown();
             }
-            let browser = view.browser();
-            glib::idle_add_local_once(move || browser.focus_active());
+            let view = view.downgrade();
+            glib::idle_add_local_once(move || {
+                if let Some(view) = view.upgrade() {
+                    view.focus_switched_view();
+                }
+            });
         });
     }
     {
@@ -871,7 +899,7 @@ pub(super) fn build_appearance_menu(
         .build();
     preview_toggle.add_css_class("appearance-option");
     preview_toggle.add_css_class("preview-panel-option");
-    super::accessibility::set_label(&preview_toggle, "Preview panel");
+    super::accessibility::set_label(&preview_toggle, &crate::i18n::tr("Preview panel"));
     let description_toggle = preview_toggle.downgrade();
     preferences.bind_preference(
         &preview_shortcut,
@@ -891,9 +919,10 @@ pub(super) fn build_appearance_menu(
                 crate::ui::accessibility::set_description(
                     &toggle,
                     Some(&if text.is_empty() {
-                        "Toggle preview panel while browsing".to_owned()
+                        crate::i18n::tr("Toggle preview panel while browsing")
                     } else {
-                        format!("Toggle preview panel while browsing ({text})")
+                        rust_i18n::t!("Toggle preview panel while browsing (%{text})", text = text)
+                            .into_owned()
                     }),
                 );
             }
@@ -916,7 +945,7 @@ pub(super) fn build_appearance_menu(
     content.append(&preview_toggle);
 
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    append_menu_heading(&content, "DENSITY");
+    append_menu_heading(&content, &crate::i18n::tr("DENSITY"));
     let current_density = preferences.browser_density();
     let hidden_files_shown = preferences.sort_preferences().show_hidden;
     let (compact, compact_check, _) = appearance_option(
@@ -924,12 +953,14 @@ pub(super) fn build_appearance_menu(
         "Compact",
         current_density == BrowserDensity::Compact,
         true,
+        gtk::AccessibleRole::MenuItemRadio,
     );
     let (airy, airy_check, _) = appearance_option(
         crate::assets::icons::ROWS,
         "Airy",
         current_density == BrowserDensity::Airy,
         true,
+        gtk::AccessibleRole::MenuItemRadio,
     );
     preferences.bind_preference(
         &compact_check,
@@ -965,7 +996,7 @@ pub(super) fn build_appearance_menu(
     content.append(&airy);
 
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    append_menu_heading(&content, "TEXT SIZE");
+    append_menu_heading(&content, &crate::i18n::tr("TEXT SIZE"));
     let text_controls = gtk::Box::new(gtk::Orientation::Horizontal, 10);
     text_controls.add_css_class("appearance-text-size");
     let sample = gtk::Label::new(Some("Aa"));
@@ -1004,6 +1035,7 @@ pub(super) fn build_appearance_menu(
         "Ctrl + H",
         hidden_files_shown,
         true,
+        gtk::AccessibleRole::MenuItemCheckbox,
     );
     let observed_hidden_check = hidden_check.clone();
     let observed_hidden_icon = hidden_icon.clone();
@@ -1068,8 +1100,9 @@ fn appearance_option(
     label: &str,
     checked: bool,
     sensitive: bool,
+    role: gtk::AccessibleRole,
 ) -> (gtk::Button, gtk::Image, gtk::Image) {
-    appearance_option_with_shortcut(icon, label, "", checked, sensitive)
+    appearance_option_with_shortcut(icon, label, "", checked, sensitive, role)
 }
 
 fn appearance_option_with_shortcut(
@@ -1078,14 +1111,23 @@ fn appearance_option_with_shortcut(
     shortcut: &str,
     checked: bool,
     sensitive: bool,
+    role: gtk::AccessibleRole,
 ) -> (gtk::Button, gtk::Image, gtk::Image) {
     let (row, check, option) = appearance_row(icon, label, shortcut, checked);
     let button = gtk::Button::builder()
         .child(&row)
         .sensitive(sensitive)
+        .accessible_role(role)
         .build();
     button.add_css_class("appearance-option");
     button.set_has_frame(false);
+    let name = crate::i18n::tr(label);
+    if shortcut.is_empty() {
+        super::accessibility::set_label(&button, &name);
+    } else {
+        super::accessibility::describe_menu_item(&button, &name, shortcut);
+    }
+    super::accessibility::sync_checked_with_icon(&button, &check);
     (button, check, option)
 }
 
@@ -1099,7 +1141,7 @@ fn appearance_row(
     let check = crate::assets::primary_icon(crate::assets::icons::CHECK, 16);
     check.set_visible(checked);
     let option = crate::assets::primary_icon(icon, 17);
-    let label = gtk::Label::new(Some(label));
+    let label = gtk::Label::new(Some(&crate::i18n::tr(label)));
     label.set_xalign(0.0);
     label.set_hexpand(true);
     row.append(&option);
@@ -1511,7 +1553,11 @@ impl SidebarState {
                     return;
                 }
                 let location = Location::local(home_directory());
-                let row = self.append_place(crate::assets::icons::HOME, "Home", location.clone());
+                let row = self.append_place(
+                    crate::assets::icons::HOME,
+                    &crate::i18n::tr("Home"),
+                    location.clone(),
+                );
                 self.add_keycap(&row, "h");
                 if !self.local_only {
                     self.attach_place_context_menu(&row, location, |state| {
@@ -1530,8 +1576,11 @@ impl SidebarState {
                     return;
                 }
                 let location = Location::uri("network:///");
-                let row =
-                    self.append_place(crate::assets::icons::NETWORK, "Network", location.clone());
+                let row = self.append_place(
+                    crate::assets::icons::NETWORK,
+                    &crate::i18n::tr("Network"),
+                    location.clone(),
+                );
                 self.add_keycap(&row, "n");
                 self.attach_place_context_menu(&row, location, |state| {
                     state.preference_manager.set_sidebar_show_network(false);
@@ -1563,9 +1612,14 @@ impl SidebarState {
                 .filter(|path| should_show_standard_place(place, path, &home_directory()))
         {
             let row = if self.local_only {
-                self.append_place(icon, name, Location::local(path))
+                self.append_place(icon, &crate::i18n::tr(name), Location::local(path))
             } else {
-                self.append_reorderable_place(place, icon, name, Location::local(path))
+                self.append_reorderable_place(
+                    place,
+                    icon,
+                    &crate::i18n::tr(name),
+                    Location::local(path),
+                )
             };
             if let Some(key) = standard_place_chord_key(place) {
                 self.add_keycap(&row, key);
@@ -1772,8 +1826,8 @@ impl SidebarState {
             }
             Err(error) => show_error_dialog(
                 &self.view.widget(),
-                "Unable to update pinned folders",
-                &error.to_string(),
+                &crate::i18n::tr("Unable to update pinned folders"),
+                &crate::services::io_error_message(&error),
             ),
         }
     }
@@ -1885,7 +1939,7 @@ impl SidebarState {
 
     fn append_recent_place(self: &Rc<Self>) {
         let location = Location::uri("recent:///");
-        let row = sidebar_button(crate::assets::icons::CLOCK, "Recent");
+        let row = sidebar_button(crate::assets::icons::CLOCK, &crate::i18n::tr("Recent"));
         crate::ui::accessibility::set_description(&row, Some("recent:///"));
         self.add_keycap(&row, "r");
         self.bind_place_row(&row, location, PlaceNavigation::Direct);
@@ -1895,7 +1949,7 @@ impl SidebarState {
 
     fn append_trash_place(self: &Rc<Self>) {
         let location = Location::uri("trash:///");
-        let row = sidebar_button(crate::assets::icons::TRASH, "Trash");
+        let row = sidebar_button(crate::assets::icons::TRASH, &crate::i18n::tr("Trash"));
         crate::ui::accessibility::set_description(&row, Some("trash:///"));
         self.add_keycap(&row, "t");
         self.bind_place_row(&row, location, PlaceNavigation::Direct);
@@ -2125,7 +2179,7 @@ impl SidebarState {
     }
 
     fn append_heading(&self, text: &str) {
-        let heading = gtk::Label::new(Some(text));
+        let heading = gtk::Label::new(Some(&crate::i18n::tr(text)));
         heading.add_css_class("sidebar-heading");
         heading.set_xalign(0.0);
         self.widget.append(&heading);
@@ -2343,7 +2397,11 @@ impl SidebarState {
                     .await
                     && !error.matches(gio::IOErrorEnum::Cancelled)
                 {
-                    show_error_dialog(&error_parent, "Unable to disconnect", &error.to_string());
+                    show_error_dialog(
+                        &error_parent,
+                        &crate::i18n::tr("Unable to disconnect"),
+                        &error.to_string(),
+                    );
                 }
             });
         });
@@ -2384,15 +2442,17 @@ impl SidebarState {
     }
 
     /// Keycaps name the second key of the **g** place chord while it is armed.
+    /// They stand in for the row icon so long place names are not truncated further.
     fn add_keycap(&self, row: &gtk::Button, key: &str) {
         let Some(content) = row.child().and_downcast::<gtk::Box>() else {
             return;
         };
         let keycap = gtk::Label::new(Some(key));
         keycap.add_css_class("sidebar-keycap");
-        keycap.set_visible(self.keycaps_shown.get() && !self.rail.get());
-        content.append(&keycap);
-        self.keycaps.borrow_mut().push(keycap);
+        keycap.set_valign(gtk::Align::Center);
+        content.insert_child_after(&keycap, content.first_child().as_ref());
+        self.keycaps.borrow_mut().push(keycap.clone());
+        sync_keycap(&keycap, self.keycaps_shown.get() && !self.rail.get());
     }
 
     pub(in crate::ui) fn show_place_keycaps(&self, shown: bool) {
@@ -2403,7 +2463,7 @@ impl SidebarState {
     fn sync_keycaps(&self) {
         let visible = self.keycaps_shown.get() && !self.rail.get();
         for keycap in self.keycaps.borrow().iter() {
-            keycap.set_visible(visible);
+            sync_keycap(keycap, visible);
         }
     }
 
@@ -3039,7 +3099,7 @@ fn release_device_volume(
                     let Some(mount) = mount else {
                         return Err(glib::Error::new(
                             gio::IOErrorEnum::Failed,
-                            "The volume is not mounted.",
+                            &crate::i18n::tr("The volume is not mounted."),
                         ));
                     };
                     mount
@@ -3050,7 +3110,7 @@ fn release_device_volume(
                     let Some(mount) = mount else {
                         return Err(glib::Error::new(
                             gio::IOErrorEnum::Failed,
-                            "The volume is not mounted.",
+                            &crate::i18n::tr("The volume is not mounted."),
                         ));
                     };
                     mount
@@ -3201,8 +3261,10 @@ fn request_encrypted_lock_showing(
     if mount.is_none() && drive.is_none() {
         show_error_dialog(
             parent,
-            "Unable to lock device",
-            "This volume has no supported lock operation while unmounted. Mount it in Strata, then try Lock again.",
+            &crate::i18n::tr("Unable to lock device"),
+            &crate::i18n::tr(
+                "This volume has no supported lock operation while unmounted. Mount it in Strata, then try Lock again.",
+            ),
         );
         return;
     }
@@ -3253,16 +3315,16 @@ fn request_encrypted_lock_showing(
                             Ok(Err(error)) => {
                                 show_error_dialog(
                                     &parent_for_forget,
-                                    "Couldn't forget the saved password",
-                                    &error.to_string(),
+                                    &crate::i18n::tr("Couldn't forget the saved password"),
+                                    &error.user_message(),
                                 );
                                 in_flight_for_forget.set(false);
                             }
                             Err(_) => {
                                 show_error_dialog(
                                     &parent_for_forget,
-                                    "Couldn't forget the saved password",
-                                    "The saved password could not be deleted.",
+                                    &crate::i18n::tr("Couldn't forget the saved password"),
+                                    &crate::i18n::tr("The saved password could not be deleted."),
                                 );
                                 in_flight_for_forget.set(false);
                             }
@@ -3308,14 +3370,14 @@ fn confirm_forget_cached_password(
 
     let layout = message_dialog_layout(
         crate::assets::icons::KEY,
-        "Forget saved password?",
+        &crate::i18n::tr("Forget saved password?"),
         volume_name,
-        "Forget and lock",
+        &crate::i18n::tr("Forget and lock"),
         ModalTone::Danger,
     );
-    layout.body.append(&message_dialog_description(
+    layout.body.append(&message_dialog_description(&crate::i18n::tr(
         "This volume’s password is saved. Locking will forget it, and you’ll need to enter it again to unlock.",
-    ));
+    )));
     let content = layout.content;
     let close = layout.close;
     let cancel = layout.cancel;
@@ -3747,6 +3809,8 @@ async fn trash_has_items(root: &gio::File) -> Result<bool, glib::Error> {
 }
 
 fn sidebar_context_option(icon: &str, label: &str, danger: bool) -> gtk::Button {
+    let translated = crate::i18n::tr(label);
+    let label = translated.as_str();
     let button = super::accessibility::menu_item_button();
     super::accessibility::describe_menu_item(&button, label, "");
     button.add_css_class("item-context-option");
@@ -3777,6 +3841,17 @@ fn customize_sidebar_folder_icon(row: &gtk::Button, location: &Location, icon: &
     }
 }
 
+fn sync_keycap(keycap: &gtk::Label, visible: bool) {
+    if let Some(icon) = keycap.prev_sibling() {
+        if visible && icon.is_visible() {
+            // Matching the icon's width keeps the place name from shifting.
+            keycap.set_width_request(icon.width());
+        }
+        icon.set_visible(!visible);
+    }
+    keycap.set_visible(visible);
+}
+
 fn sidebar_button(icon: &str, name: &str) -> gtk::Button {
     let content = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let image = crate::assets::primary_icon(icon, 17);
@@ -3799,7 +3874,7 @@ fn sidebar_button(icon: &str, name: &str) -> gtk::Button {
 
 fn sidebar_eject_button(action: MediaRelease, on_release: impl Fn() + 'static) -> gtk::Button {
     let button = gtk::Button::builder()
-        .tooltip_text(media_release_label(action))
+        .tooltip_text(crate::i18n::tr(media_release_label(action)))
         .build();
     button.set_child(Some(&crate::assets::primary_icon(
         crate::assets::icons::EJECT,
@@ -3817,7 +3892,9 @@ fn sidebar_eject_button(action: MediaRelease, on_release: impl Fn() + 'static) -
 }
 
 fn sidebar_lock_button(action: EncryptedMediaAction, on_click: impl Fn() + 'static) -> gtk::Button {
-    let button = gtk::Button::builder().tooltip_text(action.label()).build();
+    let button = gtk::Button::builder()
+        .tooltip_text(crate::i18n::tr(action.label()))
+        .build();
     button.set_child(Some(&crate::assets::primary_icon(action.icon(), 14)));
     button.add_css_class("sidebar-eject");
     button.add_css_class("sidebar-device-action");
@@ -4014,19 +4091,19 @@ fn navigate_to_gio_file(browser: &Rc<Browser>, file: &gio::File) {
     }
 }
 
-/// The sidebar update-notice pill's label text: `v{version} available` for a
-/// stable offer, or `v{version} ({label}) available` for a prerelease --
-/// e.g. `v0.5.0-rc.1 (Release candidate) available` -- so a preview build
-/// offer is never mistaken for an ordinary stable update at a glance.
+/// The sidebar update-notice pill's label text. A prerelease offer adds its
+/// build kind on its own line, so a preview build is never mistaken for an
+/// ordinary stable update and the long version cannot crowd the kind out.
 ///
 /// No channel guard belongs here: `check_for_updates` is already
 /// channel-filtered upstream, so a Stable user's `release` can never carry
 /// a prerelease kind in the first place.
 fn sidebar_update_label(release: &ReleaseMetadata) -> String {
+    let available = rust_i18n::t!("v%{version} available", version = release.version);
     if release.kind == BuildKind::Stable {
-        format!("v{} available", release.version)
+        available.into_owned()
     } else {
-        format!("v{} ({}) available", release.version, release.kind.label())
+        format!("{available}\n{}", release.kind.localized_label())
     }
 }
 
@@ -4082,7 +4159,7 @@ fn save_pinned_places(places: &[(Location, String)]) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let contents = serialize_pinned_places(places);
-    crate::storage::atomic_write(&path, contents.as_bytes())
+    crate::storage::atomic_write_config(&path, contents.as_bytes())
 }
 
 fn serialize_pinned_places(places: &[(Location, String)]) -> String {
