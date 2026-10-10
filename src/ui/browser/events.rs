@@ -622,8 +622,6 @@ impl ViewState {
                     {
                         column.focus_surface();
                     }
-                    // A deletion lands the user here, so it isn't gated on
-                    // the last navigation input.
                     if !editing
                         && self.mode_views.borrow().mode() == BrowserMode::Columns
                         && !self.suppress_scroll_after_drop.get()

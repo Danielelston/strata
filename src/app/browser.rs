@@ -120,8 +120,7 @@ pub enum BrowserEvent {
     Reset,
     ColumnsTruncated {
         len: usize,
-        /// `true` when a replacement `ColumnAdded` follows immediately
-        /// (sibling switch), so the view skips the exit animation.
+        /// A sibling's `ColumnAdded` at `len` follows immediately.
         replacing: bool,
     },
     ColumnAdded {
@@ -193,8 +192,7 @@ pub enum BrowserEvent {
     FocusChanged {
         depth: usize,
         position: Option<usize>,
-        /// `true` when a deletion landed focus here, not the user — the
-        /// view opens it regardless of the last navigation input.
+        /// A deletion, not the user, moved focus here.
         triggered_by_removal: bool,
     },
     SelectionSetChanged {
