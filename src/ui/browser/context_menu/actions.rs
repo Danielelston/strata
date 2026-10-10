@@ -657,7 +657,6 @@ struct ItemPresentation {
     send_to_device: bool,
     danger: bool,
     custom: bool,
-    action: Option<String>,
 }
 
 fn collect_presentations(model: &gio::MenuModel, items: &mut Vec<ItemPresentation>) {
@@ -687,7 +686,6 @@ fn collect_presentations(model: &gio::MenuModel, items: &mut Vec<ItemPresentatio
                     .and_then(|value| value.get::<bool>())
                     .unwrap_or(false),
                 custom: string("action").is_some_and(|name| name.starts_with("custom.")),
-                action: string("action"),
             });
         }
         for link in ["section", "submenu"] {
@@ -821,11 +819,6 @@ fn present_native_items(
             widget.add_css_class("danger");
         }
         label_menu_item(widget, &item);
-        if item.submenu.is_some()
-            && let Some(action) = &item.action
-        {
-            bind_submenu_default_action(widget, action);
-        }
         if !initialized {
             let mapped_item = item.clone();
             widget.connect_map(move |widget| label_menu_item(widget, &mapped_item));
@@ -851,22 +844,6 @@ fn present_native_items(
     for child in children {
         present_native_items(&child, root, items, navigation);
     }
-}
-
-/// GTK builds `GMenuModel` submenu buttons without an action-name, but a
-/// `GtkModelButton` that owns a popover still activates an attached action on
-/// click, so attaching one gives the submenu row a default action.
-fn bind_submenu_default_action(widget: &gtk::Widget, action: &str) {
-    if widget.find_property("popover").is_none() {
-        return;
-    }
-    widget.set_property("action-name", action);
-    if widget.has_css_class("strata-submenu-default-action") {
-        return;
-    }
-    widget.add_css_class("strata-submenu-default-action");
-    let action = action.to_owned();
-    widget.connect_map(move |widget| widget.set_property("action-name", action.clone()));
 }
 
 fn label_menu_item(widget: &gtk::Widget, item: &ItemPresentation) {

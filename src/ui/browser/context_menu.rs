@@ -33,7 +33,7 @@ const CONTEXT_MENU_EDGE_MARGIN: i32 = 16;
 pub(super) const SUBMENU_ROW_CLASS: &str = "item-context-submenu";
 pub(super) const SUBMENU_ENTRIES_CLASS: &str = "item-context-submenu-entries";
 
-fn submenu_row(header: &gtk::Button, entries: [&gtk::Button; 3]) -> gtk::Box {
+fn submenu_row(header: &gtk::Button, entries: [&gtk::Button; 2]) -> gtk::Box {
     let wrapper = gtk::Box::new(gtk::Orientation::Vertical, 0);
     wrapper.add_css_class(SUBMENU_ROW_CLASS);
     wrapper.append(header);
@@ -835,22 +835,17 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
         "Open in…",
         ContextHint::None,
     );
-    let open_in_current = item_context_option(
-        crate::assets::icons::EXTERNAL_LINK,
-        "Open",
-        ContextHint::Open,
+    let open_in_tab = item_context_option(
+        crate::assets::icons::PLUS,
+        "New Tab",
+        ContextHint::OpenInNewTab,
     );
     let open_in_window = item_context_option(
         crate::assets::icons::APP_WINDOW,
-        "Open in New Window",
+        "New Window",
         ContextHint::OpenInNewWindow,
     );
-    let open_in_tab = item_context_option(
-        crate::assets::icons::PLUS,
-        "Open in New Tab",
-        ContextHint::OpenInNewTab,
-    );
-    let open_in_submenu = submenu_row(&open_in, [&open_in_current, &open_in_window, &open_in_tab]);
+    let open_in_submenu = submenu_row(&open_in, [&open_in_tab, &open_in_window]);
     let open_with = item_context_option(
         crate::assets::icons::APP_WINDOW,
         "Open With…",
@@ -978,12 +973,12 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     single_open.append(&group);
     single_open.append(&group_separator);
     single_open.append(&open);
-    single_open.append(&open_in_submenu);
     single_open.append(&open_with);
     single_open.append(&preview);
     single_open.append(&open_file_location);
     single_open.append(&run);
     single_open.append(&open_terminal);
+    single_open.append(&open_in_submenu);
     single_open.append(&restore);
     single_open.append(&remove_from_recent);
     single_open.append(&print);
@@ -1026,28 +1021,19 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
         "Open in…",
         ContextHint::None,
     );
-    let open_in_current_multiple = item_context_option(
-        crate::assets::icons::EXTERNAL_LINK,
-        "Open",
-        ContextHint::OpenMultiple,
+    let open_in_tab_multiple = item_context_option(
+        crate::assets::icons::PLUS,
+        "New Tab",
+        ContextHint::OpenInNewTab,
     );
     let open_in_window_multiple = item_context_option(
         crate::assets::icons::APP_WINDOW,
-        "Open in New Window",
+        "New Window",
         ContextHint::OpenInNewWindow,
-    );
-    let open_in_tab_multiple = item_context_option(
-        crate::assets::icons::PLUS,
-        "Open in New Tab",
-        ContextHint::OpenInNewTab,
     );
     let open_in_multiple_submenu = submenu_row(
         &open_in_multiple,
-        [
-            &open_in_current_multiple,
-            &open_in_window_multiple,
-            &open_in_tab_multiple,
-        ],
+        [&open_in_tab_multiple, &open_in_window_multiple],
     );
     let open_with_multiple = item_context_option(
         crate::assets::icons::APP_WINDOW,
@@ -1133,8 +1119,8 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     multiple_open.append(&group_multiple);
     multiple_open.append(&group_multiple_separator);
     multiple_open.append(&open_multiple);
-    multiple_open.append(&open_in_multiple_submenu);
     multiple_open.append(&open_with_multiple);
+    multiple_open.append(&open_in_multiple_submenu);
     multiple_open.append(&restore_multiple);
     multiple_open.append(&remove_from_recent_multiple);
     content.append(&multiple_open);
@@ -1180,21 +1166,30 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
         if let Some(popover) = open_popover.upgrade() {
             popover.popdown();
         }
+        let Some((position, entry)) = open_target.borrow().clone() else {
+            return;
+        };
         if let Some(state) = weak.upgrade() {
-            open_context_target(&state, depth, &open_target);
+            if let Some(position) = current_context_position(&state, depth, position, &entry) {
+                if state.mode_views.borrow().mode() == BrowserMode::Columns {
+                    state.browser.activate(depth, position);
+                } else {
+                    state.browser.activate_in_place(depth, position);
+                }
+            } else if entry.is_directory() {
+                state.browser.navigate(entry.location);
+            } else {
+                state.browser.open_location(entry.location);
+            }
         }
     });
-    for (button, target_kind) in [
-        (&open_in, OpenInTarget::Current),
-        (&open_in_current, OpenInTarget::Current),
-        (&open_in_window, OpenInTarget::Window),
-        (&open_in_tab, OpenInTarget::Tab),
-        (&open_in_multiple, OpenInTarget::Current),
-        (&open_in_current_multiple, OpenInTarget::Current),
-        (&open_in_window_multiple, OpenInTarget::Window),
-        (&open_in_tab_multiple, OpenInTarget::Tab),
+    for (button, action) in [
+        (&open_in_tab, "win.open-tab-at"),
+        (&open_in_window, "win.open-window-at"),
+        (&open_in_tab_multiple, "win.open-tab-at"),
+        (&open_in_window_multiple, "win.open-window-at"),
     ] {
-        connect_open_in(button, &popover, state, &target, depth, target_kind);
+        connect_open_in(button, &popover, state, &target, action);
     }
     let open_file_location_target = target.clone();
     let open_file_location_state = Rc::downgrade(state);
@@ -1673,7 +1668,6 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
             compress_multiple.set_visible(can_compress);
             preview.set_visible(crate::ui::preview::entry_supports_quick_preview(&entry));
             print.set_visible(entry_supports_printing(&entry));
-            open.set_visible(!entry.is_directory());
             open_in_submenu.set_visible(entry.is_directory());
             open_in_multiple_submenu
                 .set_visible(entries.len() > 1 && entries.iter().any(|entry| entry.is_directory()));
@@ -1749,41 +1743,12 @@ pub(in crate::ui) fn install_resolved_item_context_menu(
     open_at
 }
 
-#[derive(Clone, Copy)]
-enum OpenInTarget {
-    Current,
-    Window,
-    Tab,
-}
-
-fn open_context_target(
-    state: &Rc<ViewState>,
-    depth: usize,
-    target: &RefCell<Option<ContextTarget>>,
-) {
-    let Some((position, entry)) = target.borrow().clone() else {
-        return;
-    };
-    if let Some(position) = current_context_position(state, depth, position, &entry) {
-        if state.mode_views.borrow().mode() == BrowserMode::Columns {
-            state.browser.activate(depth, position);
-        } else {
-            state.browser.activate_in_place(depth, position);
-        }
-    } else if entry.is_directory() {
-        state.browser.navigate(entry.location);
-    } else {
-        state.browser.open_location(entry.location);
-    }
-}
-
 fn connect_open_in(
     button: &gtk::Button,
     popover: &gtk::Popover,
     state: &Rc<ViewState>,
     target: &Rc<RefCell<Option<ContextTarget>>>,
-    depth: usize,
-    target_kind: OpenInTarget,
+    action: &'static str,
 ) {
     let weak_state = Rc::downgrade(state);
     let weak_popover = popover.downgrade();
@@ -1792,13 +1757,8 @@ fn connect_open_in(
         if let Some(popover) = weak_popover.upgrade() {
             popover.popdown();
         }
-        let Some(state) = weak_state.upgrade() else {
-            return;
-        };
-        match target_kind {
-            OpenInTarget::Current => open_context_target(&state, depth, &target),
-            OpenInTarget::Window => open_selected_in_action(&state, &target, "win.open-window-at"),
-            OpenInTarget::Tab => open_selected_in_action(&state, &target, "win.open-tab-at"),
+        if let Some(state) = weak_state.upgrade() {
+            open_selected_in_action(&state, &target, action);
         }
     });
 }

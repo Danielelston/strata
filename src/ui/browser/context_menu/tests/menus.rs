@@ -437,27 +437,19 @@ fn directory_rows_offer_the_open_in_submenu() {
 
             let menu = open_menu(&view, Some("folder"));
             let labels = tree_label_texts(&menu);
-            for entry in ["Open in…", "Open in New Window", "Open in New Tab"] {
+            for entry in ["Open", "Open in…", "New Tab", "New Window"] {
                 assert!(labels.iter().any(|text| text == entry), "{labels:?}");
             }
             for hint in ["Ctrl+Return", "Shift+Return"] {
                 assert!(labels.iter().any(|text| text == hint), "{labels:?}");
             }
-            let default_action = native_item_with_label(&menu, "Open in…")
-                .and_then(|item| item.property::<Option<String>>("action-name"));
-            assert!(
-                default_action
-                    .as_deref()
-                    .is_some_and(|action| action.starts_with("builtin.")),
-                "the submenu row keeps a default action: {default_action:?}"
-            );
             menu.popdown();
             wait_until(|| !menu.is_mapped());
 
             let menu = open_menu(&view, Some("notes.txt"));
             let labels = tree_label_texts(&menu);
             assert!(labels.iter().any(|text| text == "Open"), "{labels:?}");
-            for entry in ["Open in…", "Open in New Window", "Open in New Tab"] {
+            for entry in ["Open in…", "New Tab", "New Window"] {
                 assert!(!labels.iter().any(|text| text == entry), "{labels:?}");
             }
             menu.popdown();
@@ -476,17 +468,6 @@ fn tree_label_texts(menu: &gtk::Popover) -> Vec<String> {
         .filter(|label| !label.text().is_empty())
         .map(|label| label.text().to_string())
         .collect()
-}
-
-fn native_item_with_label(menu: &gtk::Popover, text: &str) -> Option<gtk::Widget> {
-    descendants(menu.upcast_ref()).into_iter().find(|widget| {
-        widget.find_property("action-name").is_some()
-            && descendants(widget).into_iter().any(|child| {
-                child
-                    .downcast_ref::<gtk::Label>()
-                    .is_some_and(|label| label.text() == text)
-            })
-    })
 }
 
 fn label_texts(menu: &gtk::Popover) -> Vec<String> {
