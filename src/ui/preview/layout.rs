@@ -776,12 +776,17 @@ impl PreviewState {
         let animation_id = self.animation_generation.get().saturating_add(1);
         self.animation_generation.set(animation_id);
         let (start, restore_browser_focus) = if expanded {
+            // A reopen during the slide out turns back from where the drawer is.
+            let start = if self.animating.get() {
+                split.position()
+            } else {
+                split.width()
+            };
             self.show_panel();
             // The animation owns the divider, including after a resize while the pane was hidden.
             split.set_resize_start_child(false);
             split.set_resize_end_child(true);
             self.pin_pane_width(split);
-            let start = split.width();
             self.preserve_column_positions(start);
             split.set_position(start);
             (start, false)

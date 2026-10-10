@@ -356,6 +356,60 @@ fn keyboard_divider_moves_lower_the_columns_session_minimum_without_moving_the_p
 }
 
 #[test]
+fn reopening_during_the_slide_out_turns_the_drawer_back() {
+    crate::test_support::gtk_test(
+        "ui::preview::tests::reopening_during_the_slide_out_turns_the_drawer_back",
+        || {
+            let provider = Rc::new(Provider::default());
+            let preview = PreviewDrawer::new(provider, false);
+            crate::ui::preferences::PreferenceManager::shared()
+                .set_browser_mode(crate::ui::browser_modes::BrowserMode::List);
+            let browser = crate::ui::browser::BrowserView::new(
+                Rc::new(crate::adapters::LocalFileSource),
+                crate::ui::browser::PeekBehavior::default(),
+            );
+            crate::ui::motion::set_reduce_motion(false);
+            if let Some(settings) = gtk::Settings::default() {
+                settings.set_gtk_enable_animations(true);
+            }
+            let window = gtk::Window::builder()
+                .default_width(1200)
+                .default_height(700)
+                .build();
+            let split = gtk::Paned::new(gtk::Orientation::Horizontal);
+            let content = gtk::Paned::new(gtk::Orientation::Horizontal);
+            content.set_end_child(Some(&browser.widget()));
+            split.set_start_child(Some(&content));
+            split.set_end_child(Some(&preview.widget()));
+            window.set_child(Some(&split));
+            preview.attach_split(&split, &content, &browser, None);
+            window.present();
+            let pump_for = |duration: std::time::Duration| {
+                let deadline = std::time::Instant::now() + duration;
+                while std::time::Instant::now() < deadline {
+                    while glib::MainContext::default().iteration(false) {}
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            };
+            preview.show(entry("sample.txt"), None);
+            pump_for(TRANSITION * 2);
+            preview.close();
+            pump_for(TRANSITION / 2);
+            let sliding = split.position();
+            assert!(sliding < split.width(), "the drawer is still sliding out");
+
+            preview.show(entry("sample.txt"), None);
+            assert_eq!(
+                split.position(),
+                sliding,
+                "a reopen turns back from where the drawer is, not from fully closed"
+            );
+            window.destroy();
+        },
+    );
+}
+
+#[test]
 fn only_a_docked_preview_offers_its_divider_for_resizing() {
     crate::test_support::gtk_test(
         "ui::preview::tests::only_a_docked_preview_offers_its_divider_for_resizing",
