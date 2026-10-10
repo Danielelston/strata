@@ -442,9 +442,7 @@ fn only_a_docked_preview_offers_its_divider_for_resizing() {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
             };
-            let divider = std::iter::successors(split.first_child(), gtk::Widget::next_sibling)
-                .find(|child| child.css_name() == "separator")
-                .expect("preview divider");
+            let divider = super::separator(&split).expect("preview divider");
             let offered = || preview.state.resize_grip.is_visible() && divider.cursor().is_some();
             settle();
             assert!(!offered(), "a hidden preview offers no resize");

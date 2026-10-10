@@ -141,7 +141,7 @@ impl Geometry {
     }
 }
 
-fn separator(split: &gtk::Paned) -> Option<gtk::Widget> {
+pub(in crate::ui) fn separator(split: &gtk::Paned) -> Option<gtk::Widget> {
     let mut child = split.first_child();
     while let Some(widget) = child {
         if widget.css_name() == "separator" {

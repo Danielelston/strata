@@ -97,10 +97,10 @@ fn column_edge(shell: &gtk::Box) -> crate::ui::resize_feedback::EdgePoint {
 
 /// The preview divider is drawn over the edge of the column that meets it.
 fn preview_divider(state: &ViewState) -> Option<gtk::Widget> {
-    let paned = std::iter::successors(state.scroller.parent(), gtk::Widget::parent)
-        .find(|widget| widget.has_css_class("preview-split"))?;
-    std::iter::successors(paned.first_child(), gtk::Widget::next_sibling)
-        .find(|child| child.css_name() == "separator")
+    let split = std::iter::successors(state.scroller.parent(), gtk::Widget::parent)
+        .find(|widget| widget.has_css_class("preview-split"))
+        .and_downcast::<gtk::Paned>()?;
+    crate::ui::preview::separator(&split)
 }
 
 fn resize_edge(state: &ViewState, x: f64, y: f64) -> Option<gtk::Box> {

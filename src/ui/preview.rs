@@ -31,7 +31,7 @@ pub(super) mod audio;
 mod ease_in;
 mod keyboard;
 mod layout;
-pub(in crate::ui) use layout::separator_width;
+pub(in crate::ui) use layout::{separator, separator_width};
 pub(in crate::ui) mod media_layout;
 #[cfg(test)]
 mod pdf_ranges_tests;
