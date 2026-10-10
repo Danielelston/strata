@@ -96,13 +96,13 @@ impl Geometry {
 
     fn desired_width(self, manual: Option<i32>) -> i32 {
         let free = (self.available - self.separator - self.occupied).max(0);
-        let desired = manual.unwrap_or_else(|| {
-            if self.columns {
-                free
-            } else {
-                free.saturating_mul(9).saturating_div(10).min(MAX_WIDTH)
-            }
-        });
+        let desired = if self.columns {
+            // A dragged width is the session's minimum; the preview still fills
+            // the free space so no gap opens beside the focused column.
+            manual.map_or(free, |manual| free.max(manual))
+        } else {
+            manual.unwrap_or_else(|| free.saturating_mul(9).saturating_div(10).min(MAX_WIDTH))
+        };
         desired.clamp(self.minimum_width(manual.is_some()), self.maximum_width())
     }
 
@@ -649,7 +649,7 @@ impl PreviewState {
             self.slot.set_visible(true);
             let position = geometry.empty_slot_position(manual);
             let slot_fills_free_space =
-                manual.is_none() && position == geometry.occupied.saturating_add(geometry.trailing);
+                position == geometry.occupied.saturating_add(geometry.trailing);
             // A stale minimum would over-allocate the slot for one shrinking frame.
             self.slot.set_width_request(if slot_fills_free_space {
                 0
@@ -687,8 +687,7 @@ impl PreviewState {
         // growth instead of correcting the browser's divider on the next frame.
         let manual = self.sizing.manual_width.get();
         let position = geometry.position(manual);
-        let preview_fills_free_space =
-            geometry.columns && manual.is_none() && position == geometry.occupied;
+        let preview_fills_free_space = geometry.columns && position == geometry.occupied;
         split.set_resize_start_child(!preview_fills_free_space);
         split.set_resize_end_child(preview_fills_free_space);
         let restored = self.sizing.suspended.replace(false);

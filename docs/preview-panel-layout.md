@@ -60,16 +60,20 @@ Constants live in `src/ui/preview/layout.rs` and `src/ui/preview.rs`.
 | Peek sliver of earlier columns | never reserved; whatever the focused column and preview leave |
 
 - **Automatic width in Columns** fills the free space right of the navigated
-  columns, clamped between the preview minimum and the space that keeps the
-  focused column visible. Trailing columns do not reduce
+  columns, clamped between the preview minimum (or a dragged width, which
+  raises it) and the space that keeps the focused column visible. Trailing columns do not reduce
   it: the preview starts after the focused column, and a pointer preview of a
   file in a parent column closes deeper columns first, like the keyboard mirror.
 - **Automatic width in Icons and List** is 90% of half the content width,
   clamped to the minimum and maximum.
 - **Manual width** comes from dragging the divider or moving it with the
-  keyboard. It is window-local and session-local: it survives closing,
-  reopening, and folder changes, and is forgotten when the window closes. A
-  manual width can go down to one column but never below the hide threshold.
+  keyboard. In Columns it becomes the session's minimum: the preview still
+  fills the free space beside the focused column when there is more room, so
+  no gap opens between them, and gives way to the columns only down to that
+  width. In Icons and List it is the preview's width. It is window-local and
+  session-local: it survives closing, reopening, and folder changes, and is
+  forgotten when the window closes. A manual width can go down to one column
+  but never below the hide threshold.
 - **Narrow windows**: the file view has priority. The preview shrinks to its
   minimum, then its content hides when less than 240 px would remain beside
   the focused column. In Columns the reserved slot itself never disappears: it
@@ -159,7 +163,7 @@ has trailing columns, so the right-pane rules above do not apply.
 | Dismissed preview ignores mirroring until reopened | `test_quick_preview.py::test_columns_dismissed_preview_ignores_keyboard_mirroring_until_reopened`, `src/ui/preview/tests.rs::an_explicit_close_blocks_automatic_previews_until_reopened` |
 | Opening or reopening a folder by click focuses its column, for one or two clicks | `tests/e2e/scenarios/test_click_modes.py::test_double_click_leaves_the_folder_open_and_focused`, `test_clicking_an_open_folder_focuses_its_column` |
 | Pointer preview closes deeper columns first | `src/app/browser/tests/navigation.rs::previewing_a_file_in_a_parent_column_closes_deeper_columns_before_requesting` |
-| Automatic width, minimum, and session manual width | `test_quick_preview.py::test_column_preview_fills_free_space_and_remembers_a_dragged_session_width` |
+| Automatic width, minimum, and session manual minimum | `test_quick_preview.py::test_column_preview_fills_free_space_and_keeps_a_dragged_session_minimum` |
 | Reservation survives closing; Appearance releases it | `test_quick_preview.py::test_columns_preview_can_reopen_after_closing`, `tests/e2e/scenarios/test_preview_session.py::test_preview_mode_survives_unsupported_selections_and_matches_appearance` |
 | Narrow windows shrink then hide the preview | `test_quick_preview.py::test_narrow_window_prioritizes_the_last_column_and_restores_the_latest_preview` |
 | Peek strips reveal clipped columns | `test_preview_session.py::test_peek_click_reveals_a_column_without_activating_rows_or_toolbar_actions` |
