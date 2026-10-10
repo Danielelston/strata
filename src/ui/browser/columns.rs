@@ -71,8 +71,9 @@ pub(super) fn install_horizontal_scroll(state: &Rc<ViewState>) {
     state.scroller.add_controller(controller);
 }
 
-const RESIZE_EDGE_RIGHT: f64 = 6.0;
-const RESIZE_EDGE_INSIDE: f64 = 6.0;
+/// How far a column's resize edge reaches either side of its line; the
+/// column's scrollbar is inset by the same distance.
+const RESIZE_EDGE_REACH: f64 = 6.0;
 
 fn meets_viewport_end(state: &ViewState, shell: &gtk::Box) -> bool {
     shell.compute_bounds(&state.scroller).is_some_and(|bounds| {
@@ -106,14 +107,8 @@ fn resize_edge(state: &ViewState, x: f64, y: f64) -> Option<gtk::Box> {
     state.columns.borrow().iter().find_map(|column| {
         let bounds = column.shell.compute_bounds(&state.scroller)?;
         let right = f64::from(bounds.x() + bounds.width());
-        // An edge against the preview has nothing beyond it, so it is grabbed from inside.
-        let inside = if meets_viewport_end(state, &column.shell) {
-            RESIZE_EDGE_INSIDE
-        } else {
-            1.0
-        };
-        (x >= right - inside
-            && x < right + RESIZE_EDGE_RIGHT
+        (x >= right - RESIZE_EDGE_REACH
+            && x < right + RESIZE_EDGE_REACH
             && y >= f64::from(bounds.y())
             && y < f64::from(bounds.y() + bounds.height()))
         .then(|| column.shell.clone())

@@ -66,6 +66,10 @@ Constants live in `src/ui/preview/layout.rs` and `src/ui/preview.rs`.
   file in a parent column closes deeper columns first, like the keyboard mirror.
 - **Automatic width in Icons and List** is 90% of half the content width,
   clamped to the minimum and maximum.
+- **A boundary between two columns** resizes the left column from 6 px either
+  side of its line, the same 6 px its scrollbar is inset by, so the gap between
+  the scrollbar and the line is never dead. This holds while that column is
+  partly scrolled out of view: its peek strip gives way to the edge.
 - **The column–preview boundary** splits by side. The last 6 px inside the
   column that meets the preview resize that column, except its last pixel,
   where the divider's 1 px line is drawn. That line and the first 6 px inside
@@ -182,6 +186,7 @@ has trailing columns, so the right-pane rules above do not apply.
 | Opening or reopening a folder by click focuses its column, for one or two clicks | `tests/e2e/scenarios/test_click_modes.py::test_double_click_leaves_the_folder_open_and_focused`, `test_clicking_an_open_folder_focuses_its_column` |
 | Pointer preview closes deeper columns first | `src/app/browser/tests/navigation.rs::previewing_a_file_in_a_parent_column_closes_deeper_columns_before_requesting` |
 | Automatic width, minimum, and session manual minimum | `test_quick_preview.py::test_column_preview_fills_free_space_and_keeps_a_dragged_session_minimum` |
+| A column boundary resizes the left column from either side, even when it is clipped | `test_quick_preview.py::test_a_clipped_parent_column_resizes_from_either_side_of_its_edge` |
 | The column–preview boundary resizes the side it is grabbed from | `test_quick_preview.py::test_the_column_preview_boundary_resizes_the_side_it_is_grabbed_from` |
 | Only a shown preview offers its grip and divider | `src/ui/preview/tests.rs::only_a_docked_preview_offers_its_divider_for_resizing` |
 | Narrowing a filled preview outlines the minimum and keeps the panel | `test_quick_preview.py::test_dragging_a_filled_column_preview_narrower_outlines_the_new_minimum`, `src/ui/preview/tests.rs::keyboard_divider_moves_lower_the_columns_session_minimum_without_moving_the_panel` |

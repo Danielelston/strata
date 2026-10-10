@@ -113,6 +113,10 @@ impl ViewState {
             }
             origin_for_press.set(Some((x, y)));
             let target = weak.upgrade().and_then(|state| {
+                // A clipped column's resize edge still resizes it.
+                if resize_edge(&state, x, y).is_some() {
+                    return None;
+                }
                 let target = state.clipped_column(x, y)?;
                 let surface = gesture.widget()?;
                 let picked = surface.pick(x, y, gtk::PickFlags::DEFAULT)?;
