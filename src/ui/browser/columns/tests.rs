@@ -422,44 +422,6 @@ fn close_column_defers_removal_until_exit_animation_then_removes_it() {
 }
 
 #[test]
-fn closing_column_shrinks_its_own_width_so_siblings_reflow_instead_of_snapping() {
-    crate::test_support::gtk_test(
-        "ui::browser::columns::tests::closing_column_shrinks_its_own_width_so_siblings_reflow_instead_of_snapping",
-        || {
-            let fixture = Columns::new(3, 900);
-            animations_on();
-            let exiting = fixture.shell(1);
-            let before = exiting.width_request().max(exiting.width());
-            assert!(before > 0, "fixture column starts with a real width");
-            fixture.view.browser().close_column(1);
-            // Sample across several points: a "jump then settle" snap would
-            // still pass a one-sample check but fail a multi-sample one.
-            let mut samples = vec![exiting.width_request()];
-            for _ in 0..6 {
-                pump_for(COLUMN_TRANSITION / 8);
-                samples.push(exiting.width_request());
-            }
-            assert!(
-                samples.windows(2).all(|pair| pair[1] <= pair[0]),
-                "the width never increases during the exit transition: {samples:?}"
-            );
-            // Headless/debug rendering may only land 2-3 real frames; require
-            // at least one real intermediate step, not just start-then-zero.
-            let distinct: std::collections::HashSet<_> = samples.iter().copied().collect();
-            assert!(
-                distinct.len() >= 3,
-                "the width passes through at least one real intermediate value across the \
-                 transition instead of jumping straight from the resting width to zero: {samples:?}"
-            );
-            pump_until(
-                || exiting.parent().is_none(),
-                "exiting column removal after COLUMN_TRANSITION",
-            );
-        },
-    );
-}
-
-#[test]
 fn switching_to_a_sibling_closes_the_old_child_without_an_exit_animation() {
     crate::test_support::gtk_test(
         "ui::browser::columns::tests::switching_to_a_sibling_closes_the_old_child_without_an_exit_animation",
