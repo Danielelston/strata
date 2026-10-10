@@ -186,7 +186,6 @@ impl Browser {
             self.emit(BrowserEvent::FocusChanged {
                 depth,
                 position: selected,
-                // The removed entry's spot was handed to whatever follows.
                 triggered_by_removal: focused_was_removed,
             });
         }

@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: MIT
 
-//! Captions naming what a resize edge changes, shown in the window overlay.
-
 use gtk::{glib, prelude::*};
 use std::{
     cell::RefCell,
@@ -13,7 +11,7 @@ const FADE: Duration = Duration::from_millis(150);
 /// Long enough that sweeping the pointer across edges does not flash captions.
 const HINT_DELAY: Duration = Duration::from_millis(400);
 
-/// Where a hint centers: a point on the edge, in window overlay coordinates.
+/// A point on the edge, in window overlay coordinates.
 pub(super) type EdgePoint = Rc<dyn Fn(&gtk::Overlay) -> Option<(f32, f32)>>;
 
 pub(super) fn caption(text: &str) -> gtk::Label {
@@ -23,7 +21,6 @@ pub(super) fn caption(text: &str) -> gtk::Label {
     label
 }
 
-/// Fades a feedback widget out of its overlay, at once under reduced motion.
 pub(super) fn fade_out(widget: &impl IsA<gtk::Widget>) {
     let widget = widget.clone().upcast::<gtk::Widget>();
     let Some(overlay) = widget.parent().and_downcast::<gtk::Overlay>() else {
@@ -41,8 +38,6 @@ pub(super) fn fade_out(widget: &impl IsA<gtk::Widget>) {
     });
 }
 
-/// A caption that appears once the pointer rests on a resize edge and can then
-/// follow that edge through a drag.
 #[derive(Default)]
 pub(super) struct EdgeHint {
     target: RefCell<Option<gtk::Widget>>,
@@ -53,8 +48,8 @@ pub(super) struct EdgeHint {
 }
 
 impl EdgeHint {
-    /// Shows the caption for `target` after a short rest; repeated motion over the
-    /// same edge keeps the pending caption instead of restarting it.
+    /// Repeated motion over the same edge keeps the pending caption instead of
+    /// restarting its delay.
     pub(super) fn hover(
         self: &Rc<Self>,
         target: &impl IsA<gtk::Widget>,
@@ -77,7 +72,6 @@ impl EdgeHint {
         self.pending.replace(Some(source));
     }
 
-    /// Shows the caption at once, as a drag on `target` begins.
     pub(super) fn show(&self, target: &impl IsA<gtk::Widget>, text: &'static str, edge: EdgePoint) {
         let target = target.as_ref();
         if self.target.borrow().as_ref() != Some(target) {
@@ -92,7 +86,6 @@ impl EdgeHint {
         self.reveal();
     }
 
-    /// Re-centers a shown caption on its edge, which moves during a drag.
     pub(super) fn follow(&self) {
         let (Some(caption), Some(edge)) =
             (self.caption.borrow().clone(), self.edge.borrow().clone())

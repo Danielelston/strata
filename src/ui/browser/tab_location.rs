@@ -143,7 +143,6 @@ impl ViewState {
         }
     }
 
-    /// The depth of the column whose folder a click is opening.
     pub(super) fn pointer_opening_depth(&self) -> Option<usize> {
         self.tab_location
             .borrow()
@@ -153,7 +152,6 @@ impl ViewState {
             .map(|(depth, _)| *depth)
     }
 
-    /// Whether a click is opening this folder into the focused column.
     pub(super) fn pointer_opens(&self, depth: usize, location: &Location) -> bool {
         self.tab_location
             .borrow()

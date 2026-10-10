@@ -214,7 +214,6 @@ impl ViewState {
         animation.play(|| {});
     }
 
-    /// Ends the flight a docked deletion claimed: it plays only if that deletion succeeded.
     pub(super) fn finish_docked_file_operation_animation(
         &self,
         request_id: crate::services::OperationRequestId,

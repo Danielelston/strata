@@ -140,7 +140,6 @@ struct PreviewState {
     provider: Rc<dyn PreviewProvider>,
     revealer: gtk::Revealer,
     slot: gtk::Box,
-    /// The preview's left edge, where the divider is grabbed beside the columns.
     resize_grip: gtk::Box,
     reserve_columns: Cell<bool>,
     // Dismissing content stops selection-following without reclaiming its column slot.
@@ -2025,7 +2024,6 @@ impl PreviewState {
             overlay.add_overlay(&text_area);
             overlay.add_overlay(&spinner);
             overlay.set_hexpand(true);
-            // Pages stop growing at the shared media width and center in wider previews.
             overlay.set_halign(gtk::Align::Center);
             overlay.set_size_request(-1, 560);
             item.set_child(Some(&overlay));

@@ -218,7 +218,6 @@ fn virtual_preview(
         row.set_size_request(-1, VIRTUAL_ROW_MIN_HEIGHT);
         row.set_hexpand(true);
         if !source {
-            // Rendered prose stops growing at the shared media width and centers.
             row.set_layout_manager(Some(super::preview::media_layout::ContentColumn::new()));
         }
         item.set_child(Some(&row));

@@ -81,7 +81,7 @@ fn meets_viewport_end(state: &ViewState, shell: &gtk::Box) -> bool {
     })
 }
 
-/// The column's right edge, top to bottom; a drag's width leads its allocation.
+/// During a drag the width request leads the allocation, so the edge follows the request.
 fn column_edge(shell: &gtk::Box) -> crate::ui::resize_feedback::EdgePoint {
     let shell = shell.downgrade();
     Rc::new(move |overlay| {
@@ -845,8 +845,6 @@ fn animate_column_exit(state: &Rc<ViewState>, column: ColumnView, animation_id: 
         };
         let progress =
             (started.elapsed().as_secs_f64() / COLUMN_TRANSITION.as_secs_f64()).clamp(0.0, 1.0);
-        // Accelerate in, not decelerate: this column is leaving, so motion
-        // should stay slow at the start instead of front-loading the shrink.
         let eased = emphasized_acceleration(progress);
         let width = (f64::from(start_width) * (1.0 - eased)).round().max(0.0) as i32;
         widget.set_size_request(width, -1);
@@ -975,7 +973,6 @@ fn animate_column_resize(
 }
 
 impl ViewState {
-    /// Once a drag settles, the other open columns ease to the width it chose.
     fn match_column_widths(&self, resized: &gtk::Box) {
         let width = resized.width_request().max(COLUMN_WIDTH);
         for column in self.columns.borrow().iter() {
@@ -2243,14 +2240,10 @@ impl ViewState {
         });
     }
 
-    /// Closes columns without an exit animation, for when a replacement is
-    /// about to grow into the same slot.
     pub(super) fn truncate_for_replacement(self: &Rc<Self>, len: usize) {
         self.truncate_impl(len, None);
     }
 
-    /// Closes columns with the standard exit animation, for a close with no
-    /// immediate replacement.
     pub(super) fn truncate(self: &Rc<Self>, len: usize) {
         self.truncate_impl(len, Some(len));
     }
@@ -2266,7 +2259,6 @@ impl ViewState {
         }
     }
 
-    /// Columns at `animate_from` and deeper leave with the exit animation.
     fn truncate_impl(self: &Rc<Self>, len: usize, animate_from: Option<usize>) {
         self.swap_slot.set(None);
         self.columns_widget.set_margin_end(0);

@@ -138,8 +138,6 @@ glib::wrapper! {
     pub struct MediaLayout(ObjectSubclass<imp::MediaLayout>) @extends gtk::LayoutManager;
 }
 
-/// The width a child gets in a content column: no wider than the shared cap,
-/// but never narrower than the child needs.
 fn column_width(child: &gtk::Widget, available: i32) -> i32 {
     let minimum = child.measure(gtk::Orientation::Horizontal, -1).0;
     available.min(MAX_CONTENT_WIDTH).max(minimum)
@@ -216,7 +214,6 @@ mod column_imp {
 }
 
 glib::wrapper! {
-    /// Stacks children top to bottom, centered and no wider than `MAX_CONTENT_WIDTH`.
     pub struct ContentColumn(ObjectSubclass<column_imp::ContentColumn>) @extends gtk::LayoutManager;
 }
 

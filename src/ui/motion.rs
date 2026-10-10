@@ -27,7 +27,6 @@ pub(super) fn emphasized_acceleration(progress: f64) -> f64 {
     cubic_bezier(progress, (0.3, 0.0), (0.8, 0.15))
 }
 
-/// A CSS `cubic-bezier()` curve through control points `first` and `second`.
 fn cubic_bezier(progress: f64, first: (f64, f64), second: (f64, f64)) -> f64 {
     let progress = progress.clamp(0.0, 1.0);
     let mut lower = 0.0;

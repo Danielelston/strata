@@ -749,9 +749,8 @@ impl PreviewState {
             })
     }
 
-    /// Slides the panel in or out like a drawer by sweeping the divider. A slot
-    /// that Columns reserves never moves: content appears in it and leaves it.
-    /// `on_settled` runs once, when the panel has finished opening or closing.
+    /// A slot that Columns reserves never slides: content appears in it and leaves
+    /// it. `on_settled` runs once, when the panel has finished opening or closing.
     pub(super) fn animate_reveal(
         self: &Rc<Self>,
         split: &gtk::Paned,
