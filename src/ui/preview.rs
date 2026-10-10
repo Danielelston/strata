@@ -809,9 +809,16 @@ impl PreviewState {
         self.pending_show.replace(Some(source));
     }
 
-    // Mirroring also emits focus for the child beyond the active depth.
+    // Mirroring also emits focus for the child beyond the active depth. A folder that a
+    // click is opening becomes the focused column, so lending to it would only flicker.
     fn lend_slot_to_child(&self, browser: &Browser, depth: usize, entry: Option<&FileEntry>) {
+        let opening = entry.is_some_and(|entry| {
+            self.sizing
+                .browser()
+                .is_some_and(|view| view.pointer_opens(depth, &entry.location))
+        });
         let child_pane = self.browsing_columns()
+            && !opening
             && (entry.is_some_and(FileEntry::is_directory)
                 || browser.active_depth().is_some_and(|active| depth > active));
         self.child_pane.set(child_pane);

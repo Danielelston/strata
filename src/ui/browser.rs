@@ -200,6 +200,8 @@ pub(super) struct ViewState {
     /// Focus echoes of the cursor are not pointer-owned.
     pointer_owns_selection: Cell<bool>,
     folder_press: RefCell<Option<columns::FolderPress>>,
+    /// The depth whose column a sibling swap just removed, so its replacement fades in.
+    swap_slot: Cell<Option<usize>>,
     tab_location: RefCell<tab_location::TabLocation>,
     column_resizing: Cell<bool>,
     horizontal_scroll_generation: Rc<Cell<u64>>,
@@ -586,6 +588,7 @@ impl BrowserView {
             input_ownership: RefCell::new(super::input_ownership::InputOwnership::default()),
             pointer_owns_selection: Cell::new(false),
             folder_press: RefCell::new(None),
+            swap_slot: Cell::new(None),
             tab_location: RefCell::new(tab_location::TabLocation::default()),
             column_resizing: Cell::new(false),
             horizontal_scroll_generation: Rc::new(Cell::new(0)),

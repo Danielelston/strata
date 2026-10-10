@@ -723,22 +723,28 @@ pub(super) fn set_mark_path_style(row: &gtk::Box, mark: super::clipboard::Clipbo
     }
 }
 
-fn animate_column_entry(column: &gtk::Box, generation: &Rc<Cell<u64>>) {
+fn animate_column_entry(column: &gtk::Box, generation: &Rc<Cell<u64>>, swapped: bool) {
     let animation_id = generation.get().saturating_add(1);
     generation.set(animation_id);
-    column.remove_css_class("column-entering");
+    // A swapped-in sibling takes the old column's place, so it only fades.
+    let class = if swapped {
+        "column-swapping"
+    } else {
+        "column-entering"
+    };
+    column.remove_css_class(class);
     if !animations_enabled() {
         return;
     }
 
-    column.add_css_class("column-entering");
+    column.add_css_class(class);
     let column = column.downgrade();
     let generation = generation.clone();
     glib::timeout_add_local_once(COLUMN_TRANSITION, move || {
         if generation.get() == animation_id
             && let Some(column) = column.upgrade()
         {
-            column.remove_css_class("column-entering");
+            column.remove_css_class(class);
         }
     });
 }
@@ -1928,7 +1934,8 @@ impl ViewState {
             arm_column_spinner(column);
         }
         self.refresh_active_path_rows();
-        animate_column_entry(&column, &animation_generation);
+        let swapped = self.swap_slot.take() == Some(depth);
+        animate_column_entry(&column, &animation_generation, swapped);
         self.reveal_column(shell);
     }
 
@@ -2114,16 +2121,29 @@ impl ViewState {
     /// Closes columns without an exit animation, for when a replacement is
     /// about to grow into the same slot.
     pub(super) fn truncate_for_replacement(self: &Rc<Self>, len: usize) {
-        self.truncate_impl(len, false);
+        self.truncate_impl(len, None);
     }
 
     /// Closes columns with the standard exit animation, for a close with no
     /// immediate replacement.
     pub(super) fn truncate(self: &Rc<Self>, len: usize) {
-        self.truncate_impl(len, true);
+        self.truncate_impl(len, Some(len));
     }
 
-    fn truncate_impl(self: &Rc<Self>, len: usize, animate: bool) {
+    /// Makes room for a sibling opening at `len`. The column in that slot goes at
+    /// once so its replacement fades in where it stood; deeper columns of the old
+    /// branch shrink away, so the strip slides instead of snapping.
+    pub(super) fn swap_columns_from(self: &Rc<Self>, len: usize) {
+        let replaced = self.columns.borrow().len() > len;
+        self.truncate_impl(len, Some(len.saturating_add(1)));
+        if replaced {
+            self.swap_slot.set(Some(len));
+        }
+    }
+
+    /// Columns at `animate_from` and deeper leave with the exit animation.
+    fn truncate_impl(self: &Rc<Self>, len: usize, animate_from: Option<usize>) {
+        self.swap_slot.set(None);
         self.columns_widget.set_margin_end(0);
         cancel_source(&self.pending_peek);
         self.peek_anchor.take();
@@ -2146,6 +2166,7 @@ impl ViewState {
             let Some(column) = self.columns.borrow_mut().pop() else {
                 break;
             };
+            let animate = animate_from.is_some_and(|from| self.columns.borrow().len() >= from);
             let animation_id = column.animation_generation.get().saturating_add(1);
             column.animation_generation.set(animation_id);
             column.query_binding.take();

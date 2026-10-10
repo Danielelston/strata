@@ -468,6 +468,9 @@ pub(super) fn column_rows(
                     && entry.is_directory()
                     && (activate || (filtered && press_count == 1 && !control && !shift)))
                     .then(|| state.hold_tab_location());
+                if activate && let Some(hold) = &location_hold {
+                    hold.opening(depth, entry.location.clone());
+                }
                 (activate, location_hold)
             } else {
                 (false, None)

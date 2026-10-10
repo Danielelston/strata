@@ -86,9 +86,7 @@ impl ViewState {
             BrowserEvent::ColumnsTruncated { len, replacing } => {
                 self.pending_new_entry.take();
                 if *replacing {
-                    // A replacement column follows immediately, so skip the
-                    // exit animation.
-                    self.truncate_for_replacement(*len);
+                    self.swap_columns_from(*len);
                 } else {
                     self.truncate(*len);
                 }

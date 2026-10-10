@@ -446,6 +446,7 @@ fn switching_to_a_sibling_closes_the_old_child_without_an_exit_animation() {
             let fixture = Columns::new(3, 900);
             animations_on();
             let old_child = fixture.shell(1);
+            let old_grandchild = fixture.shell(2);
             // Create a sibling of "level-0" under the same root so depth 0 can
             // descend into it, replacing the already-open depth-1/2 subtree.
             let root = fixture._root.path();
@@ -460,6 +461,14 @@ fn switching_to_a_sibling_closes_the_old_child_without_an_exit_animation() {
             assert!(
                 !old_child.has_css_class("column-exiting"),
                 "a sibling switch is a replacement, not a standalone close — no exit class"
+            );
+            assert!(
+                old_grandchild.parent().is_some() && old_grandchild.has_css_class("column-exiting"),
+                "deeper columns of the replaced branch shrink away so the strip slides"
+            );
+            pump_until(
+                || old_grandchild.parent().is_none(),
+                "the deeper column's exit animation to finish",
             );
         },
     );

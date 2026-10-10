@@ -99,7 +99,13 @@ Constants live in `src/ui/preview/layout.rs` and `src/ui/preview.rs`.
    hides its pane (no placeholder) and the empty slot lends the child column
    exactly its width. The columns scroller and its content grow by the same
    amount, so the scroll offset is unchanged and the focused column does not
-   move. The same applies to deeper columns left open after **Left**.
+   move. The same applies to deeper columns left open after **Left**. A folder
+   that a click is opening is the exception: from the press until its column
+   takes focus it lends nothing, and the columns beyond it borrow nothing, so
+   the strip does not shift and shift back. Switching to a sibling folder swaps
+   its column in place: the new column fades in where the old one stood, and
+   any deeper columns of the old branch shrink away, so the strip slides once
+   if it must move at all.
 3. **A focused file takes the right pane back.** The mirror closes the child
    column, the slot grows by the same amount, and the preview fills it. The
    focused column still does not move.
