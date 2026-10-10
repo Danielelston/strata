@@ -798,27 +798,22 @@ pub(super) fn set_mark_path_style(row: &gtk::Box, mark: super::clipboard::Clipbo
     }
 }
 
-fn animate_column_entry(column: &gtk::Box, generation: &Rc<Cell<u64>>, swapped: bool) {
-    let animation_id = generation.get().saturating_add(1);
-    generation.set(animation_id);
+/// Runs once per column, so its timeout owns the class outright; width
+/// animations keep their own generation.
+fn animate_column_entry(column: &gtk::Box, swapped: bool) {
+    if !animations_enabled() {
+        return;
+    }
     // A swapped-in sibling takes the old column's place, so it only fades.
     let class = if swapped {
         "column-swapping"
     } else {
         "column-entering"
     };
-    column.remove_css_class(class);
-    if !animations_enabled() {
-        return;
-    }
-
     column.add_css_class(class);
     let column = column.downgrade();
-    let generation = generation.clone();
     glib::timeout_add_local_once(COLUMN_TRANSITION, move || {
-        if generation.get() == animation_id
-            && let Some(column) = column.upgrade()
-        {
+        if let Some(column) = column.upgrade() {
             column.remove_css_class(class);
         }
     });
@@ -2015,7 +2010,6 @@ impl ViewState {
             install_directory_drop_target(self, &resize_handle, location.clone());
         }
         column_overlay.add_overlay(&reveal_button);
-        let animation_generation = Rc::new(Cell::new(0));
         let previous = depth
             .checked_sub(1)
             .and_then(|previous| self.columns.borrow().get(previous).cloned())
@@ -2026,7 +2020,7 @@ impl ViewState {
             shell: shell.clone(),
             resize_handle: resize_handle.clone(),
             reveal_button,
-            animation_generation: animation_generation.clone(),
+            animation_generation: Rc::new(Cell::new(0)),
             presentation,
             model,
             filtered_model,
@@ -2067,7 +2061,7 @@ impl ViewState {
         }
         self.refresh_active_path_rows();
         let swapped = self.swap_slot.take() == Some(depth);
-        animate_column_entry(&column, &animation_generation, swapped);
+        animate_column_entry(&column, swapped);
         self.reveal_column(shell);
     }
 

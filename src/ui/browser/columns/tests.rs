@@ -138,17 +138,16 @@ fn resize_gesture(scroller: &gtk::ScrolledWindow) -> gtk::GestureDrag {
         .expect("column-resize gesture")
 }
 
-fn shell_edge(fixture: &Columns, shell: &gtk::Box) -> (f64, f64) {
-    let scroller = fixture.scroller();
+fn shell_edge(scroller: &gtk::ScrolledWindow, shell: &gtk::Box) -> (f64, f64) {
     pump_until(
         || {
             shell
-                .compute_bounds(&scroller)
+                .compute_bounds(scroller)
                 .is_some_and(|bounds| bounds.width() > 0.0)
         },
         "column allocation",
     );
-    let bounds = shell.compute_bounds(&scroller).expect("column bounds");
+    let bounds = shell.compute_bounds(scroller).expect("column bounds");
     (
         f64::from(bounds.x() + bounds.width()) - 0.5,
         f64::from(bounds.y()) + 4.0,
@@ -356,9 +355,14 @@ fn column_entry_animation_timing_and_class_unchanged() {
                 pane.has_css_class("column-entering"),
                 "the entry class persists for the full COLUMN_TRANSITION"
             );
+            let scroller = view.state.scroller.clone();
+            let gesture = resize_gesture(&scroller);
+            let edge = shell_edge(&scroller, &shell);
+            gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
+            gesture.emit_by_name::<()>("drag-end", &[&0.0f64, &0.0f64]);
             pump_until(
                 || !pane.has_css_class("column-entering"),
-                "entry class removed",
+                "entry class removed even though a resize began during the entry",
             );
             assert!(
                 !pane.has_css_class("column-entering"),
@@ -531,7 +535,7 @@ fn autofit_double_click_eases_width_over_column_transition() {
             animations_on();
             let shell = fixture.shell(0);
             let gesture = resize_gesture(&fixture.scroller());
-            let edge = shell_edge(&fixture, &shell);
+            let edge = shell_edge(&fixture.scroller(), &shell);
             gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
             let before = shell.width_request();
             let target = autofit_target(&shell);
@@ -570,7 +574,7 @@ fn autofit_snap_skips_easing_when_animations_disabled() {
             animations_off();
             let shell = fixture.shell(0);
             let gesture = resize_gesture(&fixture.scroller());
-            let edge = shell_edge(&fixture, &shell);
+            let edge = shell_edge(&fixture.scroller(), &shell);
             gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
             let target = autofit_target(&shell);
             assert_ne!(shell.width_request(), target);
@@ -593,7 +597,7 @@ fn live_drag_resize_still_tracks_pointer_with_zero_delay() {
             animations_off();
             let shell = fixture.shell(0);
             let gesture = resize_gesture(&fixture.scroller());
-            let edge = shell_edge(&fixture, &shell);
+            let edge = shell_edge(&fixture.scroller(), &shell);
             gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
             let initial = shell.width_request().max(COLUMN_WIDTH);
             for offset in [40.0, 90.0, 150.0] {
@@ -619,7 +623,7 @@ fn a_finished_edge_drag_resizes_every_open_column() {
             let others = [fixture.shell(0), fixture.shell(2)];
             let before: Vec<_> = others.iter().map(gtk::Box::width_request).collect();
             let gesture = resize_gesture(&fixture.scroller());
-            let edge = shell_edge(&fixture, &dragged);
+            let edge = shell_edge(&fixture.scroller(), &dragged);
             gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
             gesture.emit_by_name::<()>("drag-update", &[&80.0f64, &0.0f64]);
             assert_eq!(
