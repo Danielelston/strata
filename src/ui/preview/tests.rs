@@ -393,9 +393,16 @@ fn reopening_during_the_slide_out_turns_the_drawer_back() {
             };
             preview.show(entry("sample.txt"), None);
             pump_for(TRANSITION * 2);
+            let open = split.position();
             preview.close();
-            pump_for(TRANSITION / 2);
+            // Stop at the first frame of the slide so a loaded machine cannot finish it.
+            let deadline = std::time::Instant::now() + TRANSITION * 4;
+            while split.position() == open && std::time::Instant::now() < deadline {
+                while glib::MainContext::default().iteration(false) {}
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
             let sliding = split.position();
+            assert!(sliding > open, "the drawer starts sliding out");
             assert!(sliding < split.width(), "the drawer is still sliding out");
 
             preview.show(entry("sample.txt"), None);
