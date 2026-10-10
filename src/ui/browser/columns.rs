@@ -206,6 +206,7 @@ pub(super) fn install_resize_edges(state: &Rc<ViewState>) {
             state.column_resizing.set(false);
             if let Some((shell, _, _)) = resized {
                 remember_column_width(&state, &shell);
+                state.match_column_widths(&shell);
             }
         }
     });
@@ -916,6 +917,25 @@ fn animate_column_resize(
 }
 
 impl ViewState {
+    /// Once a drag settles, the other open columns ease to the width it chose.
+    fn match_column_widths(&self, resized: &gtk::Box) {
+        let width = resized.width_request().max(COLUMN_WIDTH);
+        for column in self.columns.borrow().iter() {
+            if column.shell == *resized {
+                continue;
+            }
+            let animation_id = column.animation_generation.get().saturating_add(1);
+            column.animation_generation.set(animation_id);
+            animate_column_resize(
+                &column.shell,
+                &column.animation_generation,
+                animation_id,
+                column.shell.width().max(COLUMN_WIDTH),
+                width,
+            );
+        }
+    }
+
     pub(super) fn clear_column_selections(&self) {
         let active = self.browser.active_depth();
         let selections: Vec<_> = self

@@ -601,3 +601,37 @@ fn live_drag_resize_still_tracks_pointer_with_zero_delay() {
         },
     );
 }
+
+#[test]
+fn a_finished_edge_drag_resizes_every_open_column() {
+    crate::test_support::gtk_test(
+        "ui::browser::columns::tests::a_finished_edge_drag_resizes_every_open_column",
+        || {
+            let fixture = Columns::new(3, 1400);
+            animations_off();
+            let dragged = fixture.shell(1);
+            let others = [fixture.shell(0), fixture.shell(2)];
+            let before: Vec<_> = others.iter().map(gtk::Box::width_request).collect();
+            let gesture = resize_gesture(&fixture.scroller());
+            let edge = shell_edge(&fixture, &dragged);
+            gesture.emit_by_name::<()>("drag-begin", &[&edge.0, &edge.1]);
+            gesture.emit_by_name::<()>("drag-update", &[&80.0f64, &0.0f64]);
+            assert_eq!(
+                others
+                    .iter()
+                    .map(gtk::Box::width_request)
+                    .collect::<Vec<_>>(),
+                before,
+                "only the dragged column follows the pointer"
+            );
+            gesture.emit_by_name::<()>("drag-end", &[&80.0f64, &0.0f64]);
+            for column in &others {
+                assert_eq!(
+                    column.width_request(),
+                    dragged.width_request(),
+                    "the other open columns take the dragged width once the drag ends"
+                );
+            }
+        },
+    );
+}
