@@ -55,6 +55,7 @@ Constants live in `src/ui/preview/layout.rs` and `src/ui/preview.rs`.
 | Narrow-window hide threshold | 240 px (`MIN_SPLIT_PREVIEW_WIDTH`) |
 | Manual width minimum | one standard column, 300 px |
 | Icons and List automatic maximum | 3000 px (`MAX_WIDTH`) |
+| Image, 3D model, video, PDF, and rendered document content maximum | 1280 px (`media_layout::MAX_CONTENT_WIDTH`), centered in wider previews; PDF zoom scales from it |
 | Sidebar rail hysteresis | 24 px (`RAIL_RELEASE_MARGIN`) |
 | Peek sliver of earlier columns | never reserved; whatever the focused column and preview leave |
 

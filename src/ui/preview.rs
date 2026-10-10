@@ -30,7 +30,7 @@ mod ease_in;
 mod keyboard;
 mod layout;
 pub(in crate::ui) use layout::separator_width;
-mod media_layout;
+pub(in crate::ui) mod media_layout;
 #[cfg(test)]
 mod pdf_ranges_tests;
 mod pdf_text;
@@ -1961,6 +1961,8 @@ impl PreviewState {
             overlay.add_overlay(&text_area);
             overlay.add_overlay(&spinner);
             overlay.set_hexpand(true);
+            // Pages stop growing at the shared media width and center in wider previews.
+            overlay.set_halign(gtk::Align::Center);
             overlay.set_size_request(-1, 560);
             item.set_child(Some(&overlay));
         });
@@ -3624,7 +3626,11 @@ fn pdf_zoom_after_scroll(current: f64, dy: f64) -> f64 {
 }
 
 fn pdf_page_width(scroll: &gtk::ScrolledWindow, zoom: f64) -> i32 {
-    let fit_width = scroll.width().saturating_sub(PDF_PAGE_GAP * 2).max(1);
+    let fit_width = scroll
+        .width()
+        .min(media_layout::MAX_CONTENT_WIDTH)
+        .saturating_sub(PDF_PAGE_GAP * 2)
+        .max(1);
     (f64::from(fit_width) * zoom).round() as i32
 }
 
