@@ -24,7 +24,10 @@ shares the drawer code in `src/ui/preview.rs` and `src/ui/preview/layout.rs`.
 
 `sync_split` runs once per frame while the drawer is enabled or reserving space.
 It owns the slot's visibility, minimum width, and divider position; nothing else
-should position the divider except the user's drag.
+should position the divider except the user's drag and `animate_reveal`, which
+slides an unreserved drawer open or closed with the pane pinned at its resting
+width. A slot that Columns reserves never slides: content appears in it and
+leaves it in place.
 
 ## Terms
 
@@ -47,7 +50,7 @@ Constants live in `src/ui/preview/layout.rs` and `src/ui/preview.rs`.
 | Rule | Value |
 | --- | --- |
 | Standard column width | 300 px (`COLUMN_WIDTH`, user-resizable per column) |
-| Columns preview minimum | two standard columns, 600 px (`MIN_COLUMN_MULTIPLIER`) |
+| Columns preview minimum | one standard column, 300 px (`COLUMN_WIDTH`) |
 | Icons and List preview minimum | 240 px (`MIN_WIDTH`) |
 | Narrow-window hide threshold | 240 px (`MIN_SPLIT_PREVIEW_WIDTH`) |
 | Manual width minimum | one standard column, 300 px |

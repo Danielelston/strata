@@ -15,6 +15,10 @@ pub(in crate::ui::browser) struct ColumnSpan {
 const VISIBILITY_SLOP: f64 = 4.0;
 
 impl ColumnSpan {
+    pub fn width(self) -> f64 {
+        self.right - self.left
+    }
+
     pub fn reveal_target(self, current: f64, page_size: f64, lower: f64, upper: f64) -> f64 {
         let maximum = (upper - page_size).max(lower);
         if self.left >= current - VISIBILITY_SLOP

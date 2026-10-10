@@ -138,9 +138,11 @@ struct PreviewState {
     provider: Rc<dyn PreviewProvider>,
     revealer: gtk::Revealer,
     slot: gtk::Box,
-    // Dismissing content stops selection-following without reopening on mirroring.
+    reserve_columns: Cell<bool>,
+    // Dismissing content stops selection-following without reclaiming its column slot.
     enabled: Cell<bool>,
     dismissed: Cell<bool>,
+    child_pane: Cell<bool>,
     pane: gtk::Box,
     header_handle: gtk::Box,
     icon: gtk::Image,
@@ -330,8 +332,7 @@ impl PreviewDrawer {
             .build();
 
         let slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        // The pane keeps its resting width during the drawer slide and is
-        // clipped here as the split sweeps, so its content never reflows.
+        // The pane keeps its resting width while the drawer slides, so clip it here.
         slot.set_overflow(gtk::Overflow::Hidden);
         revealer.set_hexpand(true);
         slot.append(&revealer);
@@ -340,8 +341,10 @@ impl PreviewDrawer {
             provider,
             revealer,
             slot,
+            reserve_columns: Cell::new(true),
             enabled: Cell::new(false),
             dismissed: Cell::new(false),
+            child_pane: Cell::new(false),
             pane,
             header_handle: header_handle.clone(),
             icon,
@@ -586,6 +589,8 @@ impl PreviewDrawer {
                 if let Some(entry) = entry.clone().and_then(|entry| preview_target(Some(entry))) {
                     self.show_after_focus_change(entry, Some(*depth));
                 } else {
+                    self.state
+                        .lend_slot_to_child(browser, *depth, entry.as_ref());
                     self.clear_target();
                 }
             }
@@ -597,7 +602,10 @@ impl PreviewDrawer {
             | BrowserEvent::SelectionSynced {
                 depth,
                 focused: None,
-            } if self.is_enabled() => self.clear_target(),
+            } if self.is_enabled() => {
+                self.state.lend_slot_to_child(browser, *depth, None);
+                self.clear_target()
+            }
             BrowserEvent::EntriesSpliced { depth, splices }
                 if self.is_enabled()
                     && self.state.current_depth.get() == Some(*depth)
@@ -644,6 +652,7 @@ impl PreviewDrawer {
     }
 
     pub fn show(&self, entry: FileEntry, depth: Option<usize>) {
+        self.state.reserve_columns.set(true);
         self.state.set_enabled(true);
         if let Some(entry) = preview_target(Some(entry)) {
             self.state.show(entry, depth);
@@ -800,6 +809,14 @@ impl PreviewState {
         self.pending_show.replace(Some(source));
     }
 
+    // Mirroring also emits focus for the child beyond the active depth.
+    fn lend_slot_to_child(&self, browser: &Browser, depth: usize, entry: Option<&FileEntry>) {
+        let child_pane = self.browsing_columns()
+            && (entry.is_some_and(FileEntry::is_directory)
+                || browser.active_depth().is_some_and(|active| depth > active));
+        self.child_pane.set(child_pane);
+    }
+
     fn show(self: &Rc<Self>, entry: FileEntry, depth: Option<usize>) {
         self.cancel_pending_show();
         self.retain_pending_playback(&entry);
@@ -807,7 +824,9 @@ impl PreviewState {
             self.handed_off.take();
         }
         self.current_depth.set(depth);
+        self.reserve_columns.set(true);
         self.dismissed.set(false);
+        self.child_pane.set(false);
         self.set_enabled(true);
         let was_open = self.revealer.reveals_child() || self.sizing.is_suspended();
         let already_showing =
@@ -831,9 +850,6 @@ impl PreviewState {
         }
         if !was_open {
             self.current.replace(Some(entry.clone()));
-            // animate_reveal() reveals the panel and sweeps the divider in;
-            // showing it here first would make it pop in with nothing left to
-            // animate.
             if let Some(split) = split.as_ref() {
                 self.animate_reveal(split, true, |_| {});
             } else {
@@ -847,6 +863,7 @@ impl PreviewState {
 
     fn stop(&self) {
         self.set_enabled(false);
+        self.child_pane.set(false);
         self.clear_target();
         self.cancel_print();
         // Destroying a focused prompt does not always report a focus leave.
@@ -877,8 +894,6 @@ impl PreviewState {
         }
     }
 
-    // Runs after the close animation settles (or immediately when there is
-    // nothing to animate), so the panel doesn't visually snap shut mid-tween.
     fn finish_close(self: &Rc<Self>, tree_focused: bool) {
         if self.is_enabled() {
             self.dismissed.set(true);

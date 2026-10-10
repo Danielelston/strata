@@ -229,69 +229,6 @@ fn reveal_column_still_scrolls_a_genuinely_clipped_column() {
 }
 
 #[test]
-fn show_child_reveals_the_previewed_column_while_parent_stays_active() {
-    crate::test_support::gtk_test(
-        "ui::browser::columns::tests::show_child_reveals_the_previewed_column_while_parent_stays_active",
-        || {
-            // Same dimensions as `reveal_column_still_scrolls_a_genuinely_clipped_column`.
-            let fixture = Columns::new(6, 700);
-            animations_off();
-            // A sibling of the fixture's existing depth-5 child, so descending
-            // into it is a genuine replacement rather than a no-op (is_open_child).
-            let parent_depth = 4;
-            let root = fixture._root.path();
-            let sibling = root.join("sibling-preview");
-            std::fs::create_dir_all(&sibling).expect("sibling directory");
-            // Active-column tracking follows real GTK focus, so grab it.
-            fixture.view.browser().set_active_column(parent_depth);
-            fixture
-                .view
-                .state
-                .columns
-                .borrow()
-                .get(parent_depth)
-                .expect("parent column")
-                .list
-                .grab_focus();
-            let adjustment = fixture.adjustment();
-            pump_until(|| adjustment.page_size() > 0.0, "viewport sizing");
-            pump_until(
-                || fixture.view.browser().active_depth() == Some(parent_depth),
-                "parent column takes real focus",
-            );
-            fixture
-                .view
-                .browser()
-                .show_child(parent_depth, Location::local(&sibling));
-            pump_until(
-                || column_loaded(&fixture.view, parent_depth + 1),
-                "previewed column load",
-            );
-            pump_for(Duration::from_millis(300));
-            assert_eq!(
-                fixture.view.browser().active_depth(),
-                Some(parent_depth),
-                "show_child keeps the parent column active while previewing its child"
-            );
-            let child = fixture.shell(parent_depth + 1);
-            let bounds = child
-                .compute_bounds(&fixture.scroller())
-                .expect("previewed column bounds");
-            // Only the left edge must land at the viewport start, proving the
-            // reveal actually scrolled here instead of redirecting to active.
-            assert!(
-                (-0.5..1.0).contains(&bounds.x()),
-                "the previewed child column must be scrolled into view, not left off-screen \
-                 behind the active column (bounds x={}, width={}, viewport is {})",
-                bounds.x(),
-                bounds.width(),
-                adjustment.page_size()
-            );
-        },
-    );
-}
-
-#[test]
 fn mirror_focused_folder_forces_the_open_after_a_pointer_driven_removal() {
     crate::test_support::gtk_test(
         "ui::browser::columns::tests::mirror_focused_folder_forces_the_open_after_a_pointer_driven_removal",

@@ -2740,7 +2740,7 @@ fn new_folder_destination_depth(
         .or_else(|| pane_count.checked_sub(1))
 }
 
-pub(in crate::ui) fn single_pane_preview_reservation(width: i32) -> i32 {
+fn single_pane_preview_reservation(width: i32) -> i32 {
     width.max(0) / 2
 }
 

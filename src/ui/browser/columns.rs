@@ -1950,14 +1950,12 @@ impl ViewState {
     }
 
     pub(super) fn reveal_column(self: &Rc<Self>, shell: gtk::Box) {
-        // A stale reveal more than one level past active redirects to active;
-        // the active column's own immediate child is exempt so show_child()'s
-        // preview can still scroll into view.
+        // Trailing columns borrow preview space without displacing the active column.
         let shell = {
             let columns = self.columns.borrow();
             let depth = columns.iter().position(|column| column.shell == shell);
             match (depth, self.browser.active_depth()) {
-                (Some(depth), Some(active)) if depth > active.saturating_add(1) => columns
+                (Some(depth), Some(active)) if depth > active => columns
                     .get(active)
                     .map_or(shell, |column| column.shell.clone()),
                 _ => shell,
@@ -1965,8 +1963,10 @@ impl ViewState {
         };
         let animation_id = self.horizontal_scroll_generation.get().saturating_add(1);
         self.horizontal_scroll_generation.set(animation_id);
+        self.columns_widget.set_margin_end(0);
         let weak = Rc::downgrade(self);
         let measured_shell = shell.downgrade();
+        // Wait for the preview slot to resize before measuring the viewport.
         let laid_out = std::cell::Cell::new(false);
         let _tick = self.scroller.add_tick_callback(move |_, _| {
             let Some(state) = weak.upgrade() else {
@@ -2025,6 +2025,7 @@ impl ViewState {
     }
 
     fn truncate_impl(self: &Rc<Self>, len: usize, animate: bool) {
+        self.columns_widget.set_margin_end(0);
         cancel_source(&self.pending_peek);
         self.peek_anchor.take();
         self.close_peek_visual();
