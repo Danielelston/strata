@@ -199,6 +199,7 @@ pub(super) struct ViewState {
     /// True only while a column row gesture is writing the selection model.
     /// Focus echoes of the cursor are not pointer-owned.
     pointer_owns_selection: Cell<bool>,
+    folder_press: RefCell<Option<columns::FolderPress>>,
     tab_location: RefCell<tab_location::TabLocation>,
     column_resizing: Cell<bool>,
     horizontal_scroll_generation: Rc<Cell<u64>>,
@@ -584,6 +585,7 @@ impl BrowserView {
             context_menu_focus: RefCell::new(None),
             input_ownership: RefCell::new(super::input_ownership::InputOwnership::default()),
             pointer_owns_selection: Cell::new(false),
+            folder_press: RefCell::new(None),
             tab_location: RefCell::new(tab_location::TabLocation::default()),
             column_resizing: Cell::new(false),
             horizontal_scroll_generation: Rc::new(Cell::new(0)),
@@ -686,6 +688,8 @@ impl BrowserView {
             let columns = state.columns.borrow();
             columns.last().map(|column| column.marquee.clone())
         });
+        // Installed last so its capture press runs before the scroller's other gestures.
+        columns::install_double_click_guard(&state);
 
         state
             .mode_views

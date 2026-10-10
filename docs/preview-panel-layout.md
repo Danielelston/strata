@@ -105,8 +105,9 @@ Constants live in `src/ui/preview/layout.rs` and `src/ui/preview.rs`.
 4. **Files with no preview and empty selections** keep the "No preview for this
    selection" placeholder in Columns and Icons. List hides the drawer instead.
 5. **When the focused column does move.** Only when the user descends or
-   ascends with **Right**, **Left**, or **Enter** into a column that does not
-   fit beside the reserved slot, or when the user scrolls or resizes. Those
+   ascends with **Right**, **Left**, or **Enter**, or clicks a folder into its
+   column, and that column does not fit beside the reserved slot, or when the
+   user scrolls or resizes. Those
    scrolls reveal only as much as needed.
 6. **Priority: focused column, then preview, then peek.** The focused column
    is always fully visible. The preview takes what remains beside it, down to
@@ -149,6 +150,7 @@ has trailing columns, so the right-pane rules above do not apply.
 | Focused column stays put while mirroring folders and files | Manual check below (wide and narrow windows), with captures |
 | Folder hands the right pane to the child column, file takes it back | `test_quick_preview.py::test_columns_keyboard_selection_opens_the_preview`, `test_preview_hides_on_a_folder_and_resumes_when_selection_moves` |
 | Dismissed preview ignores mirroring until reopened | `test_quick_preview.py::test_columns_dismissed_preview_ignores_keyboard_mirroring_until_reopened`, `src/ui/preview/tests.rs::an_explicit_close_blocks_automatic_previews_until_reopened` |
+| Opening or reopening a folder by click focuses its column, for one or two clicks | `tests/e2e/scenarios/test_click_modes.py::test_double_click_leaves_the_folder_open_and_focused`, `test_clicking_an_open_folder_focuses_its_column` |
 | Pointer preview closes deeper columns first | `src/app/browser/tests/navigation.rs::previewing_a_file_in_a_parent_column_closes_deeper_columns_before_requesting` |
 | Automatic width, minimum, and session manual width | `test_quick_preview.py::test_column_preview_fills_free_space_and_remembers_a_dragged_session_width` |
 | Reservation survives closing; Appearance releases it | `test_quick_preview.py::test_columns_preview_can_reopen_after_closing`, `tests/e2e/scenarios/test_preview_session.py::test_preview_mode_survives_unsupported_selections_and_matches_appearance` |

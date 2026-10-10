@@ -323,6 +323,34 @@ fn activating_an_open_list_item_closes_its_child_column() {
 }
 
 #[test]
+fn activating_an_open_folder_focuses_its_column_without_closing_it() {
+    let browser = Browser::new(Rc::new(FakeFileSource));
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let observed = events.clone();
+    browser.observe(move |event| observed.borrow_mut().push(event.clone()));
+    browser.navigate(Location::local("/fixture"));
+    browser.activate(0, 0);
+    browser.set_active_column(0);
+    events.borrow_mut().clear();
+
+    browser.activate(0, 0);
+
+    assert!(!events.borrow().iter().any(|event| matches!(
+        event,
+        BrowserEvent::ColumnsTruncated { .. } | BrowserEvent::ColumnAdded { .. }
+    )));
+    assert_eq!(browser.active_depth(), Some(1));
+    assert!(events.borrow().iter().any(|event| matches!(
+        event,
+        BrowserEvent::FocusChanged {
+            depth: 1,
+            position: None,
+            ..
+        }
+    )));
+}
+
+#[test]
 fn requesting_first_selection_during_navigate_selects_the_first_entry() {
     let browser = Browser::new(Rc::new(FakeFileSource));
     let loader = browser.clone();

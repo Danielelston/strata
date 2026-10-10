@@ -3336,14 +3336,16 @@ impl Browser {
     }
 
     pub fn activate(self: &Rc<Self>, depth: usize, position: usize) {
-        if self
-            .entry_at(depth, position)
-            .is_some_and(|entry| entry.is_directory() && self.is_open_child(depth, &entry.location))
-        {
-            self.close_column(depth + 1);
+        let open_child = self.entry_at(depth, position).is_some_and(|entry| {
+            entry.is_directory() && self.is_open_child(depth, &entry.location)
+        });
+        self.select(depth, position);
+        if open_child {
+            // Reopening lands where opening did, without picking a child entry.
+            self.set_active_column(depth + 1);
+            self.focus_active();
             return;
         }
-        self.select(depth, position);
         self.activate_focused_with_selection(false);
     }
 

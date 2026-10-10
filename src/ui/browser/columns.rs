@@ -219,6 +219,86 @@ pub(super) fn install_resize_edges(state: &Rc<ViewState>) {
     state.scroller.add_controller(resize);
 }
 
+/// Swallows the second press of a double-click whose first click opened a folder.
+/// Opening scrolls the strip, so that press can land on any row or column.
+pub(super) fn install_double_click_guard(state: &Rc<ViewState>) {
+    let click = gtk::GestureClick::new();
+    click.set_button(1);
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let paired = Rc::new(RefCell::new(None::<(FolderPress, (f64, f64))>));
+    let paired_for_press = paired.clone();
+    let weak = Rc::downgrade(state);
+    click.connect_pressed(move |gesture, _, _, _| {
+        let modified = gesture
+            .current_event_state()
+            .intersects(gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::SHIFT_MASK);
+        let press = gesture.current_event().and_then(|event| event.position());
+        let first = weak.upgrade().and_then(|state| {
+            let first = state.folder_press.take()?;
+            let press = press.filter(|press| !modified && first.pairs_with(*press, &state))?;
+            state.cancel_click_rename();
+            Some((first, press))
+        });
+        gesture.set_state(if first.is_some() {
+            gtk::EventSequenceState::Claimed
+        } else {
+            gtk::EventSequenceState::Denied
+        });
+        paired_for_press.replace(first);
+    });
+    let paired_for_release = paired.clone();
+    let weak = Rc::downgrade(state);
+    click.connect_released(move |gesture, _, _, _| {
+        let Some((first, press)) = paired_for_release.take() else {
+            return;
+        };
+        let Some(state) = weak.upgrade() else {
+            return;
+        };
+        let threshold = state.scroller.settings().gtk_dnd_drag_threshold();
+        let moved = gesture
+            .current_event()
+            .and_then(|event| event.position())
+            .is_none_or(|release| {
+                crate::ui::pointer::exceeds_drag_threshold(press, release, threshold)
+            });
+        if !moved
+            && state
+                .browser
+                .entry_at(first.depth, first.position)
+                .is_some_and(|entry| entry.location == first.location)
+        {
+            state.activate_column_entry(first.depth, first.position);
+        }
+    });
+    click.connect_cancel(move |_, _| {
+        paired.take();
+    });
+    state.scroller.add_controller(click);
+}
+
+/// A plain press on a folder row, kept so the next press can complete a
+/// double-click on it even after the strip slid another row under the pointer.
+pub(super) struct FolderPress {
+    pub(super) at: Instant,
+    /// Window coordinates, which stay put while the strip scrolls.
+    pub(super) point: (f64, f64),
+    pub(super) depth: usize,
+    pub(super) position: usize,
+    pub(super) location: Location,
+}
+
+impl FolderPress {
+    fn pairs_with(&self, press: (f64, f64), state: &ViewState) -> bool {
+        let settings = state.scroller.settings();
+        let interval = Duration::from_millis(settings.gtk_double_click_time().max(0) as u64);
+        let distance = f64::from(settings.gtk_double_click_distance());
+        self.at.elapsed() < interval
+            && (press.0 - self.point.0).abs() <= distance
+            && (press.1 - self.point.1).abs() <= distance
+    }
+}
+
 pub(super) struct BoundRow {
     pub(super) item: glib::WeakRef<gtk::ListItem>,
     pub(super) row: glib::WeakRef<gtk::Box>,
@@ -1518,11 +1598,11 @@ impl ViewState {
                 );
                 return;
             }
-            let source_position = map_for_activation.source_position(position);
-            if let (Some(browser), Some(source_position)) =
-                (weak_browser.upgrade(), source_position)
-            {
-                browser.activate(depth, source_position);
+            if let (Some(state), Some(source_position)) = (
+                weak_state_for_activate.upgrade(),
+                map_for_activation.source_position(position),
+            ) {
+                state.activate_column_entry(depth, source_position);
             }
         });
 
@@ -1946,6 +2026,25 @@ impl ViewState {
                 }
                 break;
             }
+        }
+    }
+
+    /// Reopening an open folder lands where opening it did: its column focused and in view.
+    pub(super) fn activate_column_entry(self: &Rc<Self>, depth: usize, position: usize) {
+        let reopening = self.browser.entry_at(depth, position).is_some_and(|entry| {
+            entry.is_directory() && self.browser.is_open_child(depth, &entry.location)
+        });
+        self.browser.activate(depth, position);
+        if !reopening {
+            return;
+        }
+        let shell = self
+            .columns
+            .borrow()
+            .get(depth + 1)
+            .map(|column| column.shell.clone());
+        if let Some(shell) = shell {
+            self.reveal_column(shell);
         }
     }
 

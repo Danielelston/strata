@@ -371,7 +371,7 @@ def test_new_folder_with_selection_groups_items_and_names_it(strata, mode):
     assert not fixture.path("readme.md").exists()
     assert not fixture.path("todo.txt").exists()
     # The parent row's name is optimistic; the renamed child listing follows completion.
-    if mode == "columns":
+    if mode == "Columns":
         strata.entry("readme.md", "grouped")
         strata.entry("todo.txt", "grouped")
     strata.wait(
@@ -379,6 +379,13 @@ def test_new_folder_with_selection_groups_items_and_names_it(strata, mode):
         "the rename editor to release keyboard focus",
     )
     strata.click_entry("grouped", root)
+    if mode == "Columns":
+        # Clicking the open folder focuses its column; return to the parent.
+        strata.wait(
+            lambda: (pane := strata.focused_pane()) is not None and pane.name == "grouped",
+            "the open folder's column to take focus",
+        )
+        strata.keyboard.press("Left")
     strata.select_entry_with_keyboard("grouped")
 
     strata.keyboard.press("ctrl+z")
