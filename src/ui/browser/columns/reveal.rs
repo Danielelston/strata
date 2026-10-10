@@ -9,11 +9,6 @@ pub(in crate::ui::browser) struct ColumnSpan {
     pub trailing: f64,
 }
 
-/// Tolerance for sub-pixel drift between the summed column widths and the
-/// scroller's own bounds, which could otherwise drag an already-visible
-/// column by a few pixels.
-const VISIBILITY_SLOP: f64 = 4.0;
-
 impl ColumnSpan {
     pub fn width(self) -> f64 {
         self.right - self.left
@@ -21,9 +16,13 @@ impl ColumnSpan {
 
     pub fn reveal_target(self, current: f64, page_size: f64, lower: f64, upper: f64) -> f64 {
         let maximum = (upper - page_size).max(lower);
-        if self.left >= current - VISIBILITY_SLOP
-            && self.right <= current + page_size + VISIBILITY_SLOP
-        {
+        // A column wider than the viewport is as visible as it gets while it fills it.
+        let visible = if self.width() > page_size {
+            self.left <= current && current + page_size <= self.right
+        } else {
+            self.left >= current && self.right <= current + page_size
+        };
+        if visible {
             return current.clamp(lower, maximum);
         }
         (self.right + self.trailing - page_size)
@@ -154,39 +153,5 @@ impl ViewState {
             pending.borrow_mut().take();
         });
         self.scroller.add_controller(click);
-    }
-}
-
-#[cfg(test)]
-mod reveal_target_tests {
-    use super::ColumnSpan;
-
-    #[test]
-    fn already_visible_column_is_not_dragged_by_sub_pixel_measurement_drift() {
-        // left/right sit a few pixels past the viewport bounds, within slop.
-        let span = ColumnSpan {
-            left: 3210.0,
-            right: 3512.0,
-            trailing: 0.0,
-        };
-        let target = span.reveal_target(3210.0, 300.0, 0.0, 3510.0);
-        assert_eq!(
-            target, 3210.0,
-            "a column within VISIBILITY_SLOP of fully visible must not move"
-        );
-    }
-
-    #[test]
-    fn genuinely_clipped_column_still_scrolls() {
-        let span = ColumnSpan {
-            left: 3600.0,
-            right: 3900.0,
-            trailing: 0.0,
-        };
-        let target = span.reveal_target(3210.0, 300.0, 0.0, 3900.0);
-        assert_eq!(
-            target, 3600.0,
-            "a column well outside the viewport must still be revealed"
-        );
     }
 }

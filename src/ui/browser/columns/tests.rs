@@ -624,3 +624,49 @@ fn a_finished_edge_drag_resizes_every_open_column() {
         },
     );
 }
+
+#[test]
+fn reveal_target_moves_only_a_column_that_could_show_more() {
+    // A 300 px viewport over a 4000 px strip.
+    for (left, right, current, expected, case) in [
+        (
+            3210.0,
+            3510.0,
+            3210.0,
+            3210.0,
+            "a fully visible column stays",
+        ),
+        (
+            3210.0,
+            3510.0,
+            3212.0,
+            3210.0,
+            "a column clipped by 2 px is revealed",
+        ),
+        (
+            3210.0,
+            3512.0,
+            3212.0,
+            3212.0,
+            "a column wider than the viewport stays while it fills it",
+        ),
+        (
+            3210.0,
+            3512.0,
+            3100.0,
+            3210.0,
+            "a wide column partly in view shows its leading edge",
+        ),
+    ] {
+        let span = ColumnSpan {
+            left,
+            right,
+            trailing: 0.0,
+        };
+        assert_eq!(
+            span.reveal_target(current, 300.0, 0.0, 4000.0),
+            expected,
+            "{case}"
+        );
+    }
+}

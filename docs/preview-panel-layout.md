@@ -148,8 +148,9 @@ Constants live in `src/ui/preview/layout.rs` and `src/ui/preview.rs`.
    after those two; nothing is ever reserved for it, so it is the same for
    every selection until the window, the sidebar, or the focused column's
    width changes. `ColumnSpan::reveal_target` in
-   `src/ui/browser/columns/reveal.rs` never moves a fully visible column and
-   otherwise applies one rule: align the end of the strip (the focused column
+   `src/ui/browser/columns/reveal.rs` never moves a fully visible column, or
+   one wider than the viewport that already fills it, and otherwise applies
+   one rule: align the end of the strip (the focused column
    plus the trailing columns that fit beside it) with the right pane. Clipped
    columns show a "Reveal X column" button over whatever part of them is
    visible. The breadcrumbs, the sidebar, and **Left** remain the reliable
