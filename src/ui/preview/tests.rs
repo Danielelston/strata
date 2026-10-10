@@ -354,3 +354,55 @@ fn keyboard_divider_moves_lower_the_columns_session_minimum_without_moving_the_p
         },
     );
 }
+
+#[test]
+fn only_a_docked_preview_offers_its_divider_for_resizing() {
+    crate::test_support::gtk_test(
+        "ui::preview::tests::only_a_docked_preview_offers_its_divider_for_resizing",
+        || {
+            let provider = Rc::new(Provider::default());
+            let preview = PreviewDrawer::new(provider, false);
+            crate::ui::preferences::PreferenceManager::shared()
+                .set_browser_mode(crate::ui::browser_modes::BrowserMode::Columns);
+            let browser = crate::ui::browser::BrowserView::new(
+                Rc::new(crate::adapters::LocalFileSource),
+                crate::ui::browser::PeekBehavior::default(),
+            );
+            let window = gtk::Window::builder()
+                .default_width(1200)
+                .default_height(700)
+                .build();
+            let split = gtk::Paned::new(gtk::Orientation::Horizontal);
+            split.set_wide_handle(true);
+            let content = gtk::Paned::new(gtk::Orientation::Horizontal);
+            content.set_end_child(Some(&browser.widget()));
+            split.set_start_child(Some(&content));
+            split.set_end_child(Some(&preview.widget()));
+            window.set_child(Some(&split));
+            preview.attach_split(&split, &content, &browser, None);
+            window.present();
+            let settle = || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(400);
+                while std::time::Instant::now() < deadline {
+                    while glib::MainContext::default().iteration(false) {}
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            };
+            let divider = std::iter::successors(split.first_child(), gtk::Widget::next_sibling)
+                .find(|child| child.css_name() == "separator")
+                .expect("preview divider");
+            let offered = || preview.state.resize_grip.is_visible() && divider.cursor().is_some();
+            settle();
+            assert!(!offered(), "a hidden preview offers no resize");
+
+            preview.show(entry("sample.txt"), None);
+            settle();
+            assert!(offered(), "a docked preview offers its grip and divider");
+
+            preview.state.toggle_panel(None, None);
+            settle();
+            assert!(!offered(), "closing the preview withdraws its resize");
+            window.destroy();
+        },
+    );
+}

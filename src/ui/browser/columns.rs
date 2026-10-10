@@ -72,12 +72,47 @@ pub(super) fn install_horizontal_scroll(state: &Rc<ViewState>) {
 }
 
 const RESIZE_EDGE_RIGHT: f64 = 6.0;
+const RESIZE_EDGE_INSIDE: f64 = 6.0;
+
+fn meets_viewport_end(state: &ViewState, shell: &gtk::Box) -> bool {
+    shell.compute_bounds(&state.scroller).is_some_and(|bounds| {
+        (f64::from(bounds.x() + bounds.width()) - f64::from(state.scroller.width())).abs() <= 1.0
+    })
+}
+
+/// The column's right edge, top to bottom; a drag's width leads its allocation.
+fn column_edge(shell: &gtk::Box) -> crate::ui::resize_feedback::EdgePoint {
+    let shell = shell.downgrade();
+    Rc::new(move |overlay| {
+        let shell = shell.upgrade()?;
+        let bounds = shell.compute_bounds(overlay)?;
+        let width = match shell.width_request() {
+            requested if requested > 0 => requested as f32,
+            _ => bounds.width(),
+        };
+        Some((bounds.x() + width, bounds.y()))
+    })
+}
+
+/// The preview divider is drawn over the edge of the column that meets it.
+fn preview_divider(state: &ViewState) -> Option<gtk::Widget> {
+    let paned = std::iter::successors(state.scroller.parent(), gtk::Widget::parent)
+        .find(|widget| widget.has_css_class("preview-split"))?;
+    std::iter::successors(paned.first_child(), gtk::Widget::next_sibling)
+        .find(|child| child.css_name() == "separator")
+}
 
 fn resize_edge(state: &ViewState, x: f64, y: f64) -> Option<gtk::Box> {
     state.columns.borrow().iter().find_map(|column| {
         let bounds = column.shell.compute_bounds(&state.scroller)?;
         let right = f64::from(bounds.x() + bounds.width());
-        (x >= right - 1.0
+        // An edge against the preview has nothing beyond it, so it is grabbed from inside.
+        let inside = if meets_viewport_end(state, &column.shell) {
+            RESIZE_EDGE_INSIDE
+        } else {
+            1.0
+        };
+        (x >= right - inside
             && x < right + RESIZE_EDGE_RIGHT
             && y >= f64::from(bounds.y())
             && y < f64::from(bounds.y() + bounds.height()))
@@ -86,7 +121,9 @@ fn resize_edge(state: &ViewState, x: f64, y: f64) -> Option<gtk::Box> {
 }
 
 pub(super) fn install_resize_edges(state: &Rc<ViewState>) {
+    let hint = Rc::new(crate::ui::resize_feedback::EdgeHint::default());
     let motion = gtk::EventControllerMotion::new();
+    let hint_for_motion = hint.clone();
     motion.set_propagation_phase(gtk::PropagationPhase::Capture);
     let weak = Rc::downgrade(state);
     motion.connect_motion(move |_, x, y| {
@@ -99,16 +136,40 @@ pub(super) fn install_resize_edges(state: &Rc<ViewState>) {
                     column.resize_handle.remove_css_class("resize-hover");
                 }
             }
+            if let Some(divider) = preview_divider(&state) {
+                if hovered
+                    .as_ref()
+                    .is_some_and(|shell| meets_viewport_end(&state, shell))
+                {
+                    divider.add_css_class("resize-hover");
+                } else {
+                    divider.remove_css_class("resize-hover");
+                }
+            }
+            // A drag keeps its caption even where the edge stops following the pointer.
+            if !state.column_resizing.get() {
+                match &hovered {
+                    Some(shell) => hint_for_motion.hover(shell, "Column width", column_edge(shell)),
+                    None => hint_for_motion.hide(),
+                }
+            }
             state
                 .scroller
                 .set_cursor_from_name(hovered.map(|_| "col-resize"));
         }
     });
     let weak = Rc::downgrade(state);
+    let hint_for_leave = hint.clone();
     motion.connect_leave(move |_| {
         if let Some(state) = weak.upgrade() {
+            if !state.column_resizing.get() {
+                hint_for_leave.hide();
+            }
             for column in state.columns.borrow().iter() {
                 column.resize_handle.remove_css_class("resize-hover");
+            }
+            if let Some(divider) = preview_divider(&state) {
+                divider.remove_css_class("resize-hover");
             }
             state.scroller.set_cursor(None);
         }
@@ -121,6 +182,7 @@ pub(super) fn install_resize_edges(state: &Rc<ViewState>) {
     resize.set_propagation_phase(gtk::PropagationPhase::Capture);
     let active = Rc::new(RefCell::new(None::<(gtk::Box, i32, f64)>));
     let last_press = Rc::new(RefCell::new(None::<(gtk::Box, u64)>));
+    let hint_for_begin = hint.clone();
     let weak = Rc::downgrade(state);
     let active_for_begin = active.clone();
     resize.connect_drag_begin(move |gesture, x, y| {
@@ -183,12 +245,16 @@ pub(super) fn install_resize_edges(state: &Rc<ViewState>) {
             .map_or(x, |(pointer_x, _)| pointer_x);
         *active_for_begin.borrow_mut() =
             Some((shell.clone(), shell.width().max(COLUMN_WIDTH), pointer_x));
+        hint_for_begin.show(&shell, "Column width", column_edge(&shell));
         gesture.set_state(gtk::EventSequenceState::Claimed);
     });
     let weak_for_end = Rc::downgrade(state);
     let active_for_update = active.clone();
     let active_for_end = active.clone();
     let active_for_cancel = active.clone();
+    let hint_for_update = hint.clone();
+    let hint_for_end = hint.clone();
+    let hint_for_cancel = hint;
     resize.connect_drag_update(move |gesture, fallback_offset_x, _| {
         let active = active_for_update.borrow();
         let Some((shell, initial, start)) = active.as_ref() else {
@@ -199,8 +265,10 @@ pub(super) fn install_resize_edges(state: &Rc<ViewState>) {
             .and_then(|event| event.position())
             .map_or(fallback_offset_x, |(current, _)| current - start);
         shell.set_size_request(resized_column_width(*initial, offset_x), -1);
+        hint_for_update.follow();
     });
     resize.connect_drag_end(move |_, _, _| {
+        hint_for_end.hide();
         let resized = active_for_end.borrow_mut().take();
         if let Some(state) = weak_for_end.upgrade() {
             state.column_resizing.set(false);
@@ -213,6 +281,7 @@ pub(super) fn install_resize_edges(state: &Rc<ViewState>) {
     let weak_for_cancel = Rc::downgrade(state);
     resize.connect_cancel(move |_, _| {
         active_for_cancel.borrow_mut().take();
+        hint_for_cancel.hide();
         if let Some(state) = weak_for_cancel.upgrade() {
             state.column_resizing.set(false);
         }

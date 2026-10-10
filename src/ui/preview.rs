@@ -140,6 +140,8 @@ struct PreviewState {
     provider: Rc<dyn PreviewProvider>,
     revealer: gtk::Revealer,
     slot: gtk::Box,
+    /// The preview's left edge, where the divider is grabbed beside the columns.
+    resize_grip: gtk::Box,
     reserve_columns: Cell<bool>,
     // Dismissing content stops selection-following without reclaiming its column slot.
     enabled: Cell<bool>,
@@ -341,12 +343,22 @@ impl PreviewDrawer {
         // The pane keeps its resting width while the drawer slides, so clip it here.
         slot.set_overflow(gtk::Overflow::Hidden);
         revealer.set_hexpand(true);
-        slot.append(&revealer);
+        let resize_grip = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        resize_grip.add_css_class("preview-resize-grip");
+        resize_grip.set_width_request(layout::RESIZE_GRIP_WIDTH);
+        resize_grip.set_halign(gtk::Align::Start);
+        resize_grip.set_cursor_from_name(Some("col-resize"));
+        let slot_overlay = gtk::Overlay::new();
+        slot_overlay.set_hexpand(true);
+        slot_overlay.set_child(Some(&revealer));
+        slot_overlay.add_overlay(&resize_grip);
+        slot.append(&slot_overlay);
 
         let state = Rc::new(PreviewState {
             provider,
             revealer,
             slot,
+            resize_grip,
             reserve_columns: Cell::new(true),
             enabled: Cell::new(false),
             dismissed: Cell::new(false),

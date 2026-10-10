@@ -13,7 +13,9 @@ use crate::ui::{
 
 const MIN_SPLIT_PREVIEW_WIDTH: i32 = 240;
 const RAIL_RELEASE_MARGIN: i32 = 24;
-const OUTLINE_FADE: std::time::Duration = std::time::Duration::from_millis(150);
+/// The divider only takes its own pixel so the column beside it keeps its resize
+/// edge; this strip inside the preview is where the divider is grabbed instead.
+pub(super) const RESIZE_GRIP_WIDTH: i32 = 6;
 
 #[derive(Default)]
 pub(super) struct SplitSizing {
@@ -25,6 +27,7 @@ pub(super) struct SplitSizing {
     /// The divider position a resize restored, which GTK reports back afterwards.
     restored_position: Cell<Option<i32>>,
     minimum_outline: RefCell<Option<gtk::Box>>,
+    grip_hint: Rc<crate::ui::resize_feedback::EdgeHint>,
     suspended: Cell<bool>,
     resume_media: Cell<bool>,
     reload_on_resume: Cell<bool>,
@@ -258,6 +261,7 @@ impl PreviewDrawer {
             handle.set_cursor_from_name(Some("col-resize"));
         }
         install_resize(split, &self.state);
+        install_resize_grip(split, &self.state);
     }
 }
 
@@ -863,11 +867,9 @@ impl PreviewState {
         Some(width)
     }
 
-    /// A drag asking for less than the space the preview fills only lowers the
-    /// session minimum, so the panel stays put and an outline shows that minimum.
+    /// Every divider drag sets the session minimum. When it asks for less than the
+    /// space the preview fills, the panel stays put, so the outline shows that minimum.
     fn show_minimum_outline(&self, split: &gtk::Paned, width: i32) {
-        let geometry = self.geometry(split);
-        let shown = geometry.available - geometry.separator - split.position();
         let overlay = crate::ui::modal::window_overlay(split);
         let bounds = overlay
             .as_ref()
@@ -875,7 +877,7 @@ impl PreviewState {
         let (Some(overlay), Some(bounds)) = (overlay, bounds) else {
             return;
         };
-        if !self.revealer.reveals_child() || width >= shown {
+        if !self.revealer.reveals_child() {
             self.remove_minimum_outline();
             return;
         }
@@ -889,8 +891,9 @@ impl PreviewState {
                 outline.set_can_target(false);
                 outline.set_halign(gtk::Align::Start);
                 outline.set_valign(gtk::Align::Start);
-                let label = gtk::Label::new(Some(&crate::i18n::tr("Minimum width")));
-                label.add_css_class("preview-minimum-outline-label");
+                let label = super::super::resize_feedback::caption(&crate::i18n::tr(
+                    "Preview panel minimum width",
+                ));
                 label.set_halign(gtk::Align::Center);
                 outline.append(&label);
                 overlay.add_overlay(&outline);
@@ -903,22 +906,31 @@ impl PreviewState {
     }
 
     fn fade_minimum_outline(&self) {
-        let Some(outline) = self.sizing.minimum_outline.take() else {
-            return;
-        };
-        let Some(overlay) = outline.parent().and_downcast::<gtk::Overlay>() else {
-            return;
-        };
-        if !super::super::motion::animations_enabled() {
-            overlay.remove_overlay(&outline);
-            return;
+        if let Some(outline) = self.sizing.minimum_outline.take() {
+            super::super::resize_feedback::fade_out(&outline);
         }
-        outline.add_css_class("fading");
-        glib::timeout_add_local_once(OUTLINE_FADE, move || {
-            if outline.parent().is_some() {
-                overlay.remove_overlay(&outline);
-            }
-        });
+    }
+
+    fn can_drag_divider(&self) -> bool {
+        (self.is_enabled() || self.reserves_column_space()) && !self.sizing.is_suspended()
+    }
+
+    fn begin_divider_drag(&self, split: &gtk::Paned) {
+        self.animation_generation
+            .set(self.animation_generation.get().saturating_add(1));
+        self.animating.set(false);
+        self.sizing.resizing.set(true);
+        self.sizing.dragging.set(true);
+        let minimum = self.geometry(split).minimum_width(true);
+        self.pane.set_width_request(minimum);
+        self.slot.set_width_request(minimum);
+    }
+
+    fn end_divider_drag(&self) {
+        self.sizing.resizing.set(false);
+        if self.sizing.dragging.replace(false) {
+            self.fade_minimum_outline();
+        }
     }
 
     fn remove_minimum_outline(&self) {
@@ -928,6 +940,115 @@ impl PreviewState {
             overlay.remove_overlay(&outline);
         }
     }
+}
+
+/// Moves the divider from the grip, measuring in window coordinates because the
+/// grip itself moves with the divider.
+fn install_resize_grip(split: &gtk::Paned, state: &Rc<PreviewState>) {
+    // A hidden preview has no width to set, so only a docked one offers a resize.
+    let docked_split = split.downgrade();
+    let grip = state.resize_grip.clone();
+    let hint = state.sizing.grip_hint.clone();
+    let follow_reveal = move |revealer: &gtk::Revealer| {
+        let docked = revealer.reveals_child();
+        grip.set_visible(docked);
+        if !docked {
+            hint.hide();
+        }
+        if let Some(handle) = docked_split.upgrade().and_then(|split| separator(&split)) {
+            // GTK does not pick a divider without a cursor, so it cannot be dragged.
+            handle.set_cursor_from_name(docked.then_some("col-resize"));
+        }
+    };
+    follow_reveal(&state.revealer);
+    state.revealer.connect_reveal_child_notify(follow_reveal);
+
+    let hover = gtk::EventControllerMotion::new();
+    let hovered_split = split.downgrade();
+    let hovered = Rc::downgrade(state);
+    hover.connect_enter(move |_, _, _| {
+        if let Some(handle) = hovered_split.upgrade().and_then(|split| separator(&split)) {
+            handle.add_css_class("resize-hover");
+        }
+        if let Some(state) = hovered.upgrade() {
+            let grip = state.resize_grip.downgrade();
+            state.sizing.grip_hint.hover(
+                &state.resize_grip,
+                "Preview panel minimum width",
+                Rc::new(move |overlay| {
+                    let bounds = grip.upgrade()?.compute_bounds(overlay)?;
+                    Some((bounds.x(), bounds.y()))
+                }),
+            );
+        }
+    });
+    let left_split = split.downgrade();
+    let left = Rc::downgrade(state);
+    hover.connect_leave(move |_| {
+        if let Some(handle) = left_split.upgrade().and_then(|split| separator(&split)) {
+            handle.remove_css_class("resize-hover");
+        }
+        if let Some(state) = left.upgrade()
+            && !state.sizing.dragging.get()
+        {
+            state.sizing.grip_hint.hide();
+        }
+    });
+    state.resize_grip.add_controller(hover);
+
+    let drag = gtk::GestureDrag::new();
+    drag.set_button(1);
+    let origin = Rc::new(Cell::new(None::<(i32, f64)>));
+    let weak = Rc::downgrade(state);
+    let begun_split = split.downgrade();
+    let begun = origin.clone();
+    drag.connect_drag_begin(move |gesture, _, _| {
+        let pointer = gesture.current_event().and_then(|event| event.position());
+        let (Some(state), Some(split), Some((pointer_x, _))) =
+            (weak.upgrade(), begun_split.upgrade(), pointer)
+        else {
+            gesture.set_state(gtk::EventSequenceState::Denied);
+            return;
+        };
+        if !state.can_drag_divider() {
+            gesture.set_state(gtk::EventSequenceState::Denied);
+            return;
+        }
+        gesture.set_state(gtk::EventSequenceState::Claimed);
+        // The outline names the minimum from here on.
+        state.sizing.grip_hint.hide();
+        state.begin_divider_drag(&split);
+        begun.set(Some((split.position(), pointer_x)));
+    });
+    let moved_split = split.downgrade();
+    let moved = origin.clone();
+    drag.connect_drag_update(move |gesture, _, _| {
+        let (Some(split), Some((start, pointer_start))) = (moved_split.upgrade(), moved.get())
+        else {
+            return;
+        };
+        if let Some((pointer_x, _)) = gesture.current_event().and_then(|event| event.position()) {
+            split.set_position(start + (pointer_x - pointer_start).round() as i32);
+        }
+    });
+    let weak = Rc::downgrade(state);
+    let ended = origin.clone();
+    drag.connect_drag_end(move |_, _, _| {
+        if ended.take().is_some()
+            && let Some(state) = weak.upgrade()
+        {
+            state.end_divider_drag();
+        }
+    });
+    let weak = Rc::downgrade(state);
+    drag.connect_cancel(move |_, _| {
+        if origin.take().is_some()
+            && let Some(state) = weak.upgrade()
+        {
+            state.end_divider_drag();
+        }
+    });
+    state.resize_grip.add_controller(drag);
 }
 
 fn install_resize(split: &gtk::Paned, state: &Rc<PreviewState>) {
@@ -952,25 +1073,12 @@ fn install_resize(split: &gtk::Paned, state: &Rc<PreviewState>) {
                     && !state.sizing.is_suspended()
                     && on_separator(&split, event) =>
             {
-                state
-                    .animation_generation
-                    .set(state.animation_generation.get().saturating_add(1));
-                state.animating.set(false);
-                state.sizing.resizing.set(true);
-                state.sizing.dragging.set(true);
-                let minimum = state.geometry(&split).minimum_width(true);
-                state.pane.set_width_request(minimum);
-                state.slot.set_width_request(minimum);
+                state.begin_divider_drag(&split);
             }
             gtk::gdk::EventType::ButtonRelease
             | gtk::gdk::EventType::TouchEnd
             | gtk::gdk::EventType::TouchCancel
-            | gtk::gdk::EventType::GrabBroken => {
-                state.sizing.resizing.set(false);
-                if state.sizing.dragging.replace(false) {
-                    state.fade_minimum_outline();
-                }
-            }
+            | gtk::gdk::EventType::GrabBroken => state.end_divider_drag(),
             _ => {}
         }
         glib::Propagation::Proceed

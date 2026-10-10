@@ -66,16 +66,29 @@ Constants live in `src/ui/preview/layout.rs` and `src/ui/preview.rs`.
   file in a parent column closes deeper columns first, like the keyboard mirror.
 - **Automatic width in Icons and List** is 90% of half the content width,
   clamped to the minimum and maximum.
+- **The column–preview boundary** splits by side. The last 6 px inside the
+  column that meets the preview resize that column, and the first 6 px inside
+  the preview are the divider's grip. Hovering either side lights the line;
+  the grip also tints its strip, so the preview side is told apart. Resting
+  the pointer on either side for a moment shows a caption naming what a drag
+  would change, **Column width** or **Preview panel minimum width**; a
+  column's caption then follows its edge through the drag, and the preview's
+  gives way to the minimum outline. The grip and the divider's resize cursor
+  exist only while the preview is shown; while it is hidden there is no width
+  to set, so only the column side resizes. The divider itself takes only its
+  1 px line (a wide handle), so GTK's usual overhang never covers the
+  column's resize edge.
 - **Manual width** comes from dragging the divider or moving it with the
   keyboard. In Columns it becomes the session's minimum: the preview still
   fills the free space beside the focused column when there is more room, so
   no gap opens between them, and gives way to the columns only down to that
-  width. Dragging narrower than the space the preview fills leaves the panel in
-  place and outlines the minimum being set, captioned **Minimum width**, until
-  the drag ends. In Icons and List it is the preview's width. It is window-local and
-  session-local: it survives closing, reopening, and folder changes, and is
-  forgotten when the window closes. A manual width can go down to one column
-  but never below the hide threshold.
+  width. A divider drag outlines the minimum being set, captioned **Preview
+  panel minimum width**, until the drag ends; dragging narrower than the space
+  the preview fills leaves the panel itself in place. In Icons and List it is
+  the preview's width. It is window-local and session-local: it survives
+  closing, reopening, and folder changes, and is forgotten when the window
+  closes. A manual width can go down to one column but never below the hide
+  threshold.
 - **Narrow windows**: the file view has priority. The preview shrinks to its
   minimum, then its content hides when less than 240 px would remain beside
   the focused column. In Columns the reserved slot itself never disappears: it
@@ -166,6 +179,8 @@ has trailing columns, so the right-pane rules above do not apply.
 | Opening or reopening a folder by click focuses its column, for one or two clicks | `tests/e2e/scenarios/test_click_modes.py::test_double_click_leaves_the_folder_open_and_focused`, `test_clicking_an_open_folder_focuses_its_column` |
 | Pointer preview closes deeper columns first | `src/app/browser/tests/navigation.rs::previewing_a_file_in_a_parent_column_closes_deeper_columns_before_requesting` |
 | Automatic width, minimum, and session manual minimum | `test_quick_preview.py::test_column_preview_fills_free_space_and_keeps_a_dragged_session_minimum` |
+| The column–preview boundary resizes the side it is grabbed from | `test_quick_preview.py::test_the_column_preview_boundary_resizes_the_side_it_is_grabbed_from` |
+| Only a shown preview offers its grip and divider | `src/ui/preview/tests.rs::only_a_docked_preview_offers_its_divider_for_resizing` |
 | Narrowing a filled preview outlines the minimum and keeps the panel | `test_quick_preview.py::test_dragging_a_filled_column_preview_narrower_outlines_the_new_minimum`, `src/ui/preview/tests.rs::keyboard_divider_moves_lower_the_columns_session_minimum_without_moving_the_panel` |
 | Reservation survives closing; Appearance releases it | `test_quick_preview.py::test_columns_preview_can_reopen_after_closing`, `tests/e2e/scenarios/test_preview_session.py::test_preview_mode_survives_unsupported_selections_and_matches_appearance` |
 | Narrow windows shrink then hide the preview | `test_quick_preview.py::test_narrow_window_prioritizes_the_last_column_and_restores_the_latest_preview` |

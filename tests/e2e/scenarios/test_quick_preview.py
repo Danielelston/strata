@@ -707,7 +707,7 @@ def test_column_preview_fills_free_space_and_keeps_a_dragged_session_minimum(str
     assert nested < initial
 
     bounds = strata.preview().screen_bounds()
-    start = (bounds.x - 1, bounds.y + bounds.height // 2)
+    start = (bounds.x + 2, bounds.y + bounds.height // 2)
     distance = bounds.width // 5
     strata.pointer.drag_points(start, (start[0] - distance, start[1]))
     strata.wait(
@@ -735,7 +735,7 @@ def test_column_preview_fills_free_space_and_keeps_a_dragged_session_minimum(str
 @pytest.mark.preferences(browser_mode="columns", single_click_previews=False)
 def test_dragging_a_filled_column_preview_narrower_outlines_the_new_minimum(strata):
     def outline():
-        return strata.window.find(role="label", name="Minimum width")
+        return strata.window.find(role="label", name="Preview panel minimum width")
 
     def adjacent():
         column = strata.containers()[-1].screen_bounds()
@@ -747,7 +747,7 @@ def test_dragging_a_filled_column_preview_narrower_outlines_the_new_minimum(stra
     strata.wait(lambda: strata.preview_shows("the quick brown fox"), "the first preview")
     strata.wait(adjacent, "the preview to fill the space beside the column")
     filled = strata.preview().screen_bounds()
-    start = (filled.x - 1, filled.y + filled.height // 2)
+    start = (filled.x + 2, filled.y + filled.height // 2)
     distance = filled.width // 3
     strata.pointer.drag_points(start, (start[0] + distance, start[1]), release=False)
     try:
@@ -766,6 +766,47 @@ def test_dragging_a_filled_column_preview_narrower_outlines_the_new_minimum(stra
     strata.wait(
         lambda: abs(strata.preview().screen_bounds().width - (filled.width - distance)) <= 4,
         "the dragged minimum to hold where the columns need the space",
+    )
+
+
+@pytest.mark.preferences(browser_mode="columns", single_click_previews=False)
+@pytest.mark.parametrize("side", ["column", "preview"])
+def test_the_column_preview_boundary_resizes_the_side_it_is_grabbed_from(strata, side):
+    strata.select_entry_with_keyboard("notes.txt")
+    strata.keyboard.press("space")
+    strata.wait(lambda: strata.preview_shows("the quick brown fox"), "the first preview")
+    strata.settle(strata.preview())
+    column = strata.containers()[-1].screen_bounds()
+    preview = strata.preview().screen_bounds()
+    x = preview.x - 3 if side == "column" else preview.x + 3
+    start = (x, preview.y + preview.height // 2)
+    def caption(name):
+        return strata.window.find(role="label", name=name)
+
+    strata.pointer.move_to(*start)
+    hint = "Column width" if side == "column" else "Preview panel minimum width"
+    strata.wait(lambda: caption(hint) is not None, "a resize hint before the drag starts")
+    strata.pointer.drag_points(start, (start[0] + 40, start[1]), release=False)
+    try:
+        if side == "column":
+            strata.wait(
+                lambda: strata.containers()[-1].screen_bounds().width > column.width + 20,
+                "the column beside the preview to widen",
+            )
+            strata.wait(lambda: caption("Column width") is not None, "the column width caption")
+            assert caption("Preview panel minimum width") is None
+        else:
+            strata.wait(
+                lambda: caption("Preview panel minimum width") is not None,
+                "the preview divider to outline its minimum",
+            )
+            assert caption("Column width") is None
+            assert strata.containers()[-1].screen_bounds().width == column.width
+    finally:
+        strata.pointer.connection.button(1, False)
+    strata.wait(
+        lambda: caption("Column width") is None and caption("Preview panel minimum width") is None,
+        "the resize captions to go once the drag ends",
     )
 
 
