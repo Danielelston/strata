@@ -196,6 +196,8 @@ struct PreviewState {
     focus_archive_request: Cell<Option<PreviewRequestId>>,
     enabled_action: gio::SimpleAction,
     animating: Cell<bool>,
+    /// A closed preview's drawer is still sliding out.
+    closing: Cell<bool>,
     animation_generation: Rc<Cell<u64>>,
     keyboard_view: RefCell<Option<super::browser::WeakBrowserView>>,
     claim_on_resume: Cell<bool>,
@@ -399,6 +401,7 @@ impl PreviewDrawer {
                 &false.to_variant(),
             ),
             animating: Cell::new(false),
+            closing: Cell::new(false),
             animation_generation: Rc::new(Cell::new(0)),
             keyboard_view: RefCell::new(None),
             audio: RefCell::new(None),
@@ -839,7 +842,8 @@ impl PreviewState {
         self.dismissed.set(false);
         self.child_pane.set(false);
         self.set_enabled(true);
-        let was_open = self.revealer.reveals_child() || self.sizing.is_suspended();
+        let reopening = self.closing.replace(false);
+        let was_open = (self.revealer.reveals_child() && !reopening) || self.sizing.is_suspended();
         let already_showing =
             self.current.borrow().as_ref() == Some(&entry) && self.current_request.get().is_some();
         let split = self.split.borrow().clone();
@@ -896,24 +900,36 @@ impl PreviewState {
                             || focused.is_ancestor(browser.root())
                     })
             });
-        if self.revealer.reveals_child()
-            && let Some(split) = self.split.borrow().clone()
-        {
-            self.animate_reveal(&split, false, move |state| state.finish_close(tree_focused));
-        } else {
-            self.finish_close(tree_focused);
-        }
-    }
-
-    fn finish_close(self: &Rc<Self>, tree_focused: bool) {
+        // The preview closes now, so input such as the next Escape already
+        // reaches the files; only the drawer's slide out waits.
+        let restore_focus = tree_focused || self.hide_intent();
         if self.is_enabled() {
             self.dismissed.set(true);
         }
-        self.stop();
-        self.pane.set_size_request(MIN_WIDTH, -1);
-        if tree_focused && let Some(browser) = self.sizing.browser() {
+        self.set_enabled(false);
+        self.child_pane.set(false);
+        self.content.set_focusable(false);
+        self.set_keyboard_owner(false);
+        if restore_focus && let Some(browser) = self.sizing.browser() {
             browser.focus_file_view();
         }
+        if self.revealer.reveals_child()
+            && let Some(split) = self.split.borrow().clone()
+        {
+            self.closing.set(true);
+            self.animate_reveal(&split, false, |state| {
+                if state.closing.replace(false) {
+                    state.finish_close();
+                }
+            });
+        } else {
+            self.finish_close();
+        }
+    }
+
+    fn finish_close(&self) {
+        self.stop();
+        self.pane.set_size_request(MIN_WIDTH, -1);
     }
 
     fn print(self: &Rc<Self>) {

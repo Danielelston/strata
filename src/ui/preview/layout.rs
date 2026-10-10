@@ -437,7 +437,7 @@ impl PreviewState {
     }
 
     /// Whether the browser view needs focus restored once the panel is gone.
-    fn hide_intent(&self) -> bool {
+    pub(super) fn hide_intent(&self) -> bool {
         self.pane
             .root()
             .and_then(|root| root.focus())
