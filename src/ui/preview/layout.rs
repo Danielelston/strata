@@ -19,6 +19,8 @@ pub(super) struct SplitSizing {
     binding: RefCell<Option<BrowserBinding>>,
     manual_width: Cell<Option<i32>>,
     resizing: Cell<bool>,
+    /// The divider position a resize restored, which GTK reports back afterwards.
+    restored_position: Cell<Option<i32>>,
     suspended: Cell<bool>,
     resume_media: Cell<bool>,
     reload_on_resume: Cell<bool>,
@@ -27,6 +29,11 @@ pub(super) struct SplitSizing {
 }
 
 impl SplitSizing {
+    #[cfg(test)]
+    pub(super) fn manual_width_for_test(&self) -> Option<i32> {
+        self.manual_width.get()
+    }
+
     pub(super) fn close(&self) {
         self.resizing.set(false);
         self.suspended.set(false);
@@ -894,9 +901,15 @@ fn install_resize(split: &gtk::Paned, state: &Rc<PreviewState>) {
     split.connect_position_notify(move |split| {
         if let Some(state) = weak.upgrade()
             && (state.is_enabled() || state.reserves_column_space())
+            && state.sizing.restored_position.take() != Some(split.position())
             && state.sizing.resizing.replace(false)
         {
-            state.resize_preview(split, split.position());
+            let dragged = split.position();
+            state.resize_preview(split, dragged);
+            if split.position() != dragged {
+                // Filling the free space put the divider back; that echo is not a resize.
+                state.sizing.restored_position.set(Some(split.position()));
+            }
             state.sizing.resizing.set(true);
         }
     });
