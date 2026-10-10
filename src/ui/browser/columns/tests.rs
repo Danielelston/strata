@@ -281,6 +281,7 @@ fn switching_to_a_sibling_closes_the_old_child_without_an_exit_animation() {
         },
     );
 }
+
 #[test]
 fn close_column_skips_exit_animation_when_animations_disabled() {
     crate::test_support::gtk_test(
@@ -297,6 +298,7 @@ fn close_column_skips_exit_animation_when_animations_disabled() {
         },
     );
 }
+
 #[test]
 fn a_finished_edge_drag_resizes_every_open_column() {
     crate::test_support::gtk_test(
@@ -366,11 +368,22 @@ fn double_clicking_an_edge_autofits_the_column_and_saves_its_width() {
 }
 
 #[test]
-fn a_column_that_fits_is_revealed_even_when_clipped_by_a_few_pixels() {
-    let span = ColumnSpan {
-        left: 3210.0,
-        right: 3510.0,
-        trailing: 0.0,
-    };
-    assert_eq!(span.reveal_target(3212.0, 300.0, 0.0, 4000.0), 3210.0);
+fn reveal_shows_a_fitting_column_whole_and_leaves_a_filling_one_alone() {
+    let cases = [
+        ((3210.0, 3510.0), 3212.0, 300.0, 3210.0),
+        ((1000.0, 1702.0), 1001.0, 700.0, 1001.0),
+        ((1000.0, 1702.0), 900.0, 700.0, 1000.0),
+    ];
+    for ((left, right), current, page_size, expected) in cases {
+        let span = ColumnSpan {
+            left,
+            right,
+            trailing: 0.0,
+        };
+        assert_eq!(
+            span.reveal_target(current, page_size, 0.0, 4000.0),
+            expected,
+            "{left}..{right} seen from {current} in {page_size}"
+        );
+    }
 }
