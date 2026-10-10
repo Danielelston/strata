@@ -496,6 +496,15 @@ fn docked_trash_move_plays_its_flight_only_when_it_succeeds() {
                     },
                 );
                 assert!(state.pending_file_operation_animation.borrow().is_some());
+                state.handle(&crate::app::BrowserEvent::OperationFailed {
+                    message: "Unrelated foreground failure".into(),
+                    password_failure: None,
+                });
+                pump_until(|| crate::ui::window::visible_modal_layer(&fixture.window).is_some());
+                assert!(
+                    state.pending_file_operation_animation.borrow().is_some(),
+                    "a foreground failure leaves the docked move's flight alone"
+                );
                 let event = match outcome {
                     "success" => crate::app::BrowserEvent::DeletionFinished { succeeded: true },
                     "unsuccessful" => {

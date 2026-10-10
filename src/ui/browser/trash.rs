@@ -177,7 +177,20 @@ impl ViewState {
         }
     }
 
+    /// Drops a failed foreground operation's animations; a docked deletion keeps
+    /// the ones it claimed until its own terminal event.
     pub(super) fn clear_delete_animation(&self) {
+        if self.delete_dissolve_request.get().is_none() {
+            self.pending_delete_dissolve.take();
+        }
+        if self.file_operation_animation_request.get().is_none() {
+            self.pending_file_operation_animation.take();
+        }
+    }
+
+    /// Frees the animation slots for an operation about to start, taking them
+    /// from a docked deletion too.
+    fn reset_delete_animation(&self) {
         self.delete_dissolve_request.set(None);
         self.pending_delete_dissolve.take();
         self.set_pending_file_operation_animation(None);
@@ -999,7 +1012,7 @@ impl ViewState {
                         return;
                     }
                     if let Some(ui) = weak_ui.upgrade() {
-                        ui.clear_delete_animation();
+                        ui.reset_delete_animation();
                         let dissolve = ui.delete_animation_source().and_then(|source| {
                             super::dissolve_delete::prepare_dissolve(&source, &entries_for_dissolve)
                         });
