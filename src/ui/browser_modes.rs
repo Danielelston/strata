@@ -4125,8 +4125,6 @@ impl PanePositions {
     }
 }
 
-/// Opens an entry's directory through the window's open-in-new actions, so a row
-/// gesture reaches the same helper the item context menu uses.
 fn open_entry_in_new(row: &glib::WeakRef<gtk::Widget>, location: &Location, action: &str) {
     let Some(widget) = row.upgrade() else {
         return;
@@ -4158,8 +4156,6 @@ fn install_modified_selection_click(
     click.set_propagation_phase(gtk::PropagationPhase::Capture);
     let sequence = super::collection_interaction::PointerSequence::default();
     sequence.install(&click);
-    // Middle-click opens a directory in a new tab (Ctrl/Shift: new window) or
-    // reveals a file in its parent, across the list and icon presentations.
     super::collection_interaction::install_row_middle_click(widget, item, {
         let browser = browser.clone();
         let row = widget.upcast_ref::<gtk::Widget>().downgrade();

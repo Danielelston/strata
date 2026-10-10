@@ -46,8 +46,6 @@ fn anchor_at(state: &std::rc::Weak<ViewState>, depth: usize, map: &ViewMap, row:
     }
 }
 
-/// Opens a row's directory through one of the window's open-in-new actions, so a
-/// gesture reaches the same helper the context menu uses.
 fn open_row_in_new(state: &Rc<ViewState>, location: &Location, action: &str) {
     let uri = crate::adapters::gio_file_for_location(location)
         .uri()
@@ -748,9 +746,6 @@ pub(super) fn column_rows(
         if let Some(drag) = &content_drag {
             drag.group_with(&selection_click);
         }
-        // Open a directory in a new tab (Ctrl/Shift: new window), or reveal a
-        // file in its parent. The autoscroll gesture skips rows so this press
-        // reaches the row.
         crate::ui::collection_interaction::install_row_middle_click(
             row.upcast_ref::<gtk::Widget>(),
             item,

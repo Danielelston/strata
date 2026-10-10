@@ -28,10 +28,9 @@ mod presentation;
 
 const CONTEXT_MENU_EDGE_MARGIN: i32 = 16;
 
-/// Marks the `gtk::Box` wrapper that `commands::collect` turns into a submenu
-/// row instead of flattening its nested buttons into top-level rows.
+/// `commands::collect` turns a box with this class into a native submenu
+/// instead of flattening its buttons into top-level rows.
 pub(super) const SUBMENU_ROW_CLASS: &str = "item-context-submenu";
-/// Marks the nested box holding a submenu row's entries.
 pub(super) const SUBMENU_ENTRIES_CLASS: &str = "item-context-submenu-entries";
 
 fn submenu_row(header: &gtk::Button, entries: [&gtk::Button; 3]) -> gtk::Box {
@@ -1757,8 +1756,6 @@ enum OpenInTarget {
     Tab,
 }
 
-/// The submenu row's default action and its "Open" entry: activate the clicked
-/// entry in the current view, exactly as the flat `Open` row did.
 fn open_context_target(
     state: &Rc<ViewState>,
     depth: usize,
@@ -1806,8 +1803,6 @@ fn connect_open_in(
     });
 }
 
-/// Opens every selected directory in its own new tab or window through unit 1's
-/// window actions. Files in the selection are skipped: they have no target.
 fn open_selected_in_action(
     state: &Rc<ViewState>,
     target: &RefCell<Option<ContextTarget>>,

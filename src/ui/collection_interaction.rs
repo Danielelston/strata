@@ -92,8 +92,6 @@ impl PointerSequence {
     }
 }
 
-/// What a middle-click on a row should do, given the pressed entry and the
-/// modifier state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MiddleClickAction {
     OpenTab,
@@ -101,8 +99,6 @@ pub(super) enum MiddleClickAction {
     RevealParent,
 }
 
-/// Middle-click a directory row to open it in a new tab; Ctrl or Shift opens a
-/// new window. A file has no new-tab target, so it reveals in its parent.
 pub(super) fn middle_click_action(
     is_directory: bool,
     control: bool,
@@ -118,10 +114,8 @@ pub(super) fn middle_click_action(
     }
 }
 
-/// Installs the middle-click open/reveal gesture on a row. The press must stay
-/// within the drag threshold and not be part of a multi-click, so a press-and-move
-/// never opens and a stray double middle-click opens once. `activate` receives the
-/// row's view position and the press modifiers.
+/// A press that moves past the drag threshold or repeats as a multi-click does
+/// not activate. `activate` receives the row's view position and modifiers.
 pub(super) fn install_row_middle_click(
     widget: &impl IsA<gtk::Widget>,
     item: &gtk::ListItem,

@@ -63,14 +63,6 @@ fn middle_click_opens_directories_and_reveals_files_for_each_modifier() {
     assert_eq!(middle_click_action(true, true, false), OpenWindow);
     assert_eq!(middle_click_action(true, false, true), OpenWindow);
     assert_eq!(middle_click_action(false, false, false), RevealParent);
-    assert_eq!(
-        middle_click_action(false, true, false),
-        RevealParent,
-        "a file has no new-window target"
-    );
-    assert_eq!(
-        middle_click_action(false, false, true),
-        RevealParent,
-        "a file has no new-window target"
-    );
+    assert_eq!(middle_click_action(false, true, false), RevealParent);
+    assert_eq!(middle_click_action(false, false, true), RevealParent);
 }

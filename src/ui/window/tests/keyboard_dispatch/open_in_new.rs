@@ -4,8 +4,7 @@ use super::*;
 
 const MODES: [BrowserMode; 3] = [BrowserMode::Columns, BrowserMode::List, BrowserMode::Icons];
 
-/// Registers recording stand-ins for the window actions unit 1 installs, so a
-/// gesture or key can be observed reaching them without a real `TabWindow`.
+/// Records the window actions a `TabWindow` would otherwise handle.
 fn record_open_actions(window: &gtk::ApplicationWindow) -> Rc<RefCell<Vec<(String, String)>>> {
     use gtk::gio::prelude::ActionMapExt;
 
@@ -24,8 +23,6 @@ fn record_open_actions(window: &gtk::ApplicationWindow) -> Rc<RefCell<Vec<(Strin
     recorded
 }
 
-/// Navigates the fixture to a fresh root containing one directory `folder`, so
-/// the gesture and key tests have a new-tab target.
 fn open_fixture(fixture: &KeyboardFixture) -> tempfile::TempDir {
     let root = tempfile::tempdir().expect("fixture root");
     std::fs::create_dir(root.path().join("folder")).expect("fixture folder");
@@ -106,7 +103,6 @@ fn middle_click_opens_a_directory_in_a_new_tab_in_every_view_mode() {
                 assert_eq!(opened[0].0, "open-tab-at", "{mode:?}");
                 assert_eq!(opened[0].1, expected_uri(&folder), "{mode:?}");
 
-                // A stray double middle-click must not open a second tab.
                 assert!(middle_click_row(&fixture.view.widget(), "folder", 2));
                 pump(50);
                 assert_eq!(
@@ -188,8 +184,6 @@ fn ctrl_and_shift_enter_open_a_directory_in_a_new_tab_or_window() {
     );
 }
 
-/// On a focused file, Ctrl+Enter opens with the default app (plain Enter), never
-/// a new tab.
 #[test]
 fn ctrl_enter_on_a_focused_file_opens_with_the_default_app() {
     crate::test_support::gtk_test(
@@ -211,7 +205,6 @@ fn ctrl_enter_on_a_focused_file_opens_with_the_default_app() {
     );
 }
 
-/// On a focused file, Shift+Enter opens with the default app, never a new window.
 #[test]
 fn shift_enter_on_a_focused_file_opens_with_the_default_app() {
     crate::test_support::gtk_test(

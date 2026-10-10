@@ -167,8 +167,6 @@ impl TabWindow {
         self.add(location.or_else(|| Some(super::super::startup_location(&self.preferences))));
     }
 
-    /// Opens an explicit directory in a new tab, appended last and made active,
-    /// routing the target through the open-argument connecting/unavailable overlay.
     fn open_in_new_tab(self: &Rc<Self>, location: Location) {
         if self.blocked() || self.window.upgrade().is_none() {
             return;
@@ -178,8 +176,6 @@ impl TabWindow {
         super::super::open_argument::route_location(self.active_browser(), location);
     }
 
-    /// Opens an explicit directory in a new window, presented at the default
-    /// size, routing the target through the open-argument overlay.
     fn open_in_new_window(self: &Rc<Self>, location: Location) -> Option<BrowserView> {
         let application = self.window.upgrade()?.application()?;
         tracing::debug!(location = %location.display_path(), "opening location in new window");
@@ -388,8 +384,7 @@ impl TabWindow {
         });
         window.add_action(&select);
 
-        // Reachable from any widget in the tree (menu rows, gestures) so the
-        // caller does not need a handle on this `TabWindow`.
+        // Window actions let menu rows and gestures reach this `TabWindow`.
         let open_tab = gio::SimpleAction::new("open-tab-at", Some(&String::static_variant_type()));
         let weak = Rc::downgrade(self);
         open_tab.connect_activate(move |_, parameter| {

@@ -24,8 +24,6 @@ pub fn present_open(application: &gtk::Application, file: gio::File) {
     present_window(application, location, file);
 }
 
-/// Opens an explicit `location` in a new window, presenting it at the default
-/// size and reusing the connecting/unavailable overlay for the target.
 pub(super) fn present_location_window(
     application: &gtk::Application,
     location: Location,
@@ -51,8 +49,6 @@ fn present_window(
     browser
 }
 
-/// Routes an already-created surface (a new tab's browser) at an explicit
-/// `location` through the connecting/unavailable overlay.
 pub(super) fn route_location(browser: BrowserView, location: Location) {
     classify(browser, gio_file_for_location(&location), location);
 }

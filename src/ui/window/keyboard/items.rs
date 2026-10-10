@@ -30,9 +30,7 @@ enum OpenInNewTarget {
 }
 
 impl Dispatcher {
-    /// Ctrl+Enter / Shift+Enter: a focused directory opens in a new tab or
-    /// window; a focused file opens with its default app (plain Enter). Reports
-    /// whether the press was handled so plain Enter is untouched.
+    /// A focused file opens as with plain Enter.
     fn open_focused_in_new(&self, browser: &Rc<Browser>, target: OpenInNewTarget) -> bool {
         let entry = self
             .view
@@ -58,8 +56,6 @@ impl Dispatcher {
         true
     }
 
-    /// The 10xer dispatch's Ctrl+Enter / Shift+Enter variant of
-    /// [`Self::open_focused_in_new`].
     fn tenxer_open_focused_in_new(
         &self,
         browser: &Rc<Browser>,

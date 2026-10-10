@@ -101,9 +101,6 @@ struct RowContext<'a> {
     transfer_sections: [Option<gio::Menu>; 2],
 }
 
-/// A flattened context-menu row. A `Submenu` row is a `Box` wrapper carrying the
-/// [`super::SUBMENU_ROW_CLASS`] marker: its header button becomes a submenu item
-/// and its nested buttons become the submenu entries.
 enum Row {
     Separator,
     Button(gtk::Button),

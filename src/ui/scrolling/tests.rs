@@ -26,8 +26,6 @@ fn press(gesture: &gtk::GestureClick, x: f64, y: f64) {
     gesture.emit_by_name::<()>("pressed", &[&1i32, &x, &y]);
 }
 
-/// Autoscroll is anchored by a middle press over the view background, but a row
-/// claims the press for its own open/reveal gesture, so no anchor is placed.
 #[test]
 fn middle_click_autoscroll_skips_rows_and_anchors_on_background() {
     crate::test_support::gtk_test(

@@ -853,12 +853,9 @@ fn present_native_items(
     }
 }
 
-/// A `GMenuModel` submenu item cannot carry a default action: GTK builds the
-/// submenu button without an action-name (`gtkmenusectionbox.c`,
-/// `gtk_menu_section_box_insert_func`). A `GtkModelButton` still activates an
-/// attached action on click even when it owns a popover
-/// (`gtkmodelbutton.c`, `gtk_model_button_clicked`), so attach the item's
-/// action to the generated button to keep the submenu row's default action.
+/// GTK builds `GMenuModel` submenu buttons without an action-name, but a
+/// `GtkModelButton` that owns a popover still activates an attached action on
+/// click, so attaching one gives the submenu row a default action.
 fn bind_submenu_default_action(widget: &gtk::Widget, action: &str) {
     if widget.find_property("popover").is_none() {
         return;

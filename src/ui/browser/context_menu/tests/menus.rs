@@ -468,8 +468,7 @@ fn directory_rows_offer_the_open_in_submenu() {
     );
 }
 
-/// Every label in the menu tree, including a collapsed submenu's entries, which
-/// stay in the tree but are not shown until the submenu opens.
+/// Includes collapsed submenu entries, which stay in the widget tree.
 fn tree_label_texts(menu: &gtk::Popover) -> Vec<String> {
     descendants(menu.upcast_ref())
         .into_iter()
