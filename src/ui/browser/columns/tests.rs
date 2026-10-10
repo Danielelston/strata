@@ -545,6 +545,12 @@ fn autofit_double_click_eases_width_over_column_transition() {
                 before,
                 "the eased width has not stepped within the same tick"
             );
+            let scale = PreferenceManager::shared().interface_scale();
+            assert_eq!(
+                PreferenceManager::shared().browser_column_width(),
+                Some(((f64::from(target) / scale).round() as i32).max(COLUMN_WIDTH)),
+                "autofit saves the width it eases to, not the one it starts from"
+            );
             pump_for(COLUMN_TRANSITION + Duration::from_millis(60));
             assert_eq!(
                 shell.width_request(),

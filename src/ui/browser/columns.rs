@@ -230,7 +230,7 @@ pub(super) fn install_resize_edges(state: &Rc<ViewState>) {
                 shell.width().max(COLUMN_WIDTH),
                 target_width,
             );
-            remember_column_width(&state, &shell);
+            remember_column_width(&state, target_width);
             gesture.set_state(gtk::EventSequenceState::Claimed);
             return;
         }
@@ -268,7 +268,7 @@ pub(super) fn install_resize_edges(state: &Rc<ViewState>) {
         if let Some(state) = weak_for_end.upgrade() {
             state.column_resizing.set(false);
             if let Some((shell, _, _)) = resized {
-                remember_column_width(&state, &shell);
+                remember_column_width(&state, shell.width_request());
                 state.match_column_widths(&shell);
             }
         }
@@ -869,9 +869,9 @@ fn animate_column_exit(state: &Rc<ViewState>, column: ColumnView, animation_id: 
     });
 }
 
-fn remember_column_width(state: &ViewState, shell: &gtk::Box) {
+fn remember_column_width(state: &ViewState, width: i32) {
     let preferences = crate::ui::preferences::PreferenceManager::shared();
-    let width = (f64::from(shell.width_request()) / preferences.interface_scale()).round() as i32;
+    let width = (f64::from(width) / preferences.interface_scale()).round() as i32;
     let width = Some(width.max(COLUMN_WIDTH));
     if state.browser.is_chooser_mode() {
         preferences.set_chooser_column_width(width);
