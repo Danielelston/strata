@@ -32,6 +32,10 @@ enum OpenInNewTarget {
 impl Dispatcher {
     /// A focused file opens as with plain Enter.
     fn open_focused_in_new(&self, browser: &Rc<Browser>, target: OpenInNewTarget) -> bool {
+        // Choosers have no tabs, and Ctrl+Enter there accepts the folder.
+        if self.chooser.is_some() {
+            return false;
+        }
         let entry = self
             .view
             .selected_search_result()
