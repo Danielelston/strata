@@ -456,6 +456,72 @@ fn docked_deletion_keeps_its_animation_until_its_own_terminal_event() {
 }
 
 #[test]
+fn docked_trash_move_plays_its_flight_only_when_it_succeeds() {
+    crate::test_support::gtk_test(
+        "ui::browser::progress::tests::minimization::docked_trash_move_plays_its_flight_only_when_it_succeeds",
+        || {
+            for outcome in ["success", "unsuccessful", "cancelled"] {
+                let fixture = Fixture::new();
+                let copy = fixture.transfer("copy.txt", false);
+                fixture.progress(copy);
+                let trash = gtk::Button::with_label("Trash");
+                trash.set_halign(gtk::Align::End);
+                trash.set_valign(gtk::Align::End);
+                fixture
+                    .window
+                    .child()
+                    .and_downcast::<gtk::Overlay>()
+                    .expect("window overlay")
+                    .add_overlay(&trash);
+                let state = &fixture.view.state;
+                state.trash_button.set(Some(&trash));
+                let (moved, _) = fixture.prepare_deletion();
+                state.pending_delete_dissolve.take();
+                state.request_delete(vec![moved], false);
+                let deletion = fixture
+                    .view
+                    .browser()
+                    .last_started_operation()
+                    .expect("trash move started");
+                fixture.progress(deletion);
+                assert!(
+                    state.pending_file_operation_animation.borrow().is_some(),
+                    "docking a trash move keeps its flight"
+                );
+                state.handle_background_file_operation(
+                    copy,
+                    &crate::app::BrowserEvent::OperationFailed {
+                        message: "Unrelated copy failure".into(),
+                        password_failure: None,
+                    },
+                );
+                assert!(state.pending_file_operation_animation.borrow().is_some());
+                let event = match outcome {
+                    "success" => crate::app::BrowserEvent::DeletionFinished { succeeded: true },
+                    "unsuccessful" => {
+                        crate::app::BrowserEvent::DeletionFinished { succeeded: false }
+                    }
+                    _ => crate::app::BrowserEvent::OperationCancelled {
+                        completed: 0,
+                        failed: 0,
+                        not_attempted: 1,
+                        affected_locations: Default::default(),
+                    },
+                };
+                state.handle_background_file_operation(deletion, &event);
+                assert!(state.pending_file_operation_animation.borrow().is_none());
+                assert_eq!(
+                    trash.has_css_class("trash-receiving"),
+                    outcome == "success",
+                    "only a successful move flies its items into the Trash"
+                );
+                pump_until(|| !trash.has_css_class("trash-receiving"));
+            }
+        },
+    );
+}
+
+#[test]
 fn background_failure_preserves_an_exclusive_foreground_move() {
     crate::test_support::gtk_test(
         "ui::browser::progress::tests::minimization::background_failure_preserves_an_exclusive_foreground_move",

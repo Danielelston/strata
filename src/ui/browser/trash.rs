@@ -177,14 +177,41 @@ impl ViewState {
     pub(super) fn clear_delete_animation(&self) {
         self.delete_dissolve_request.set(None);
         self.pending_delete_dissolve.take();
-        self.pending_file_operation_animation.take();
+        self.set_pending_file_operation_animation(None);
+    }
+
+    /// A newly prepared flight belongs to the operation about to start, not to
+    /// one that is already docked.
+    pub(super) fn set_pending_file_operation_animation(
+        &self,
+        animation: Option<super::fly_to_trash::PreparedFlight>,
+    ) {
+        self.file_operation_animation_request.set(None);
+        self.pending_file_operation_animation.replace(animation);
     }
 
     pub(super) fn play_pending_file_operation_animation(&self) {
+        self.file_operation_animation_request.set(None);
         let Some(animation) = self.pending_file_operation_animation.take() else {
             return;
         };
         animation.play(|| {});
+    }
+
+    /// Ends the flight a docked deletion claimed: it plays only if that deletion succeeded.
+    pub(super) fn finish_docked_file_operation_animation(
+        &self,
+        request_id: crate::services::OperationRequestId,
+        succeeded: bool,
+    ) {
+        if self.file_operation_animation_request.get() != Some(request_id) {
+            return;
+        }
+        if succeeded {
+            self.play_pending_file_operation_animation();
+        } else {
+            self.set_pending_file_operation_animation(None);
+        }
     }
 
     pub(super) fn delete_animation_defers_empty_state(&self, depth: usize) -> bool {
@@ -677,7 +704,7 @@ impl ViewState {
                         &trash_button,
                     )
                 });
-                state.pending_file_operation_animation.replace(animation);
+                state.set_pending_file_operation_animation(animation);
             }
             browser.restore(items.clone());
             browser.focus_active();
@@ -748,7 +775,7 @@ impl ViewState {
         let animation = source.zip(trash_button).and_then(|(source, trash_button)| {
             super::fly_to_trash::prepare_fly_to_trash(&source, entries.iter(), &trash_button)
         });
-        self.pending_file_operation_animation.replace(animation);
+        self.set_pending_file_operation_animation(animation);
         self.browser.delete(entries, false);
         self.browser.focus_active();
     }

@@ -163,8 +163,11 @@ impl ViewState {
         let progress = self
             .progress_state
             .replace(Rc::new(FileProgressState::new(&self.overlay)));
-        if deleting {
-            self.pending_file_operation_animation.take();
+        if deleting
+            && self.file_operation_animation_request.get().is_none()
+            && self.pending_file_operation_animation.borrow().is_some()
+        {
+            self.file_operation_animation_request.set(Some(request_id));
         }
         if deleting
             && self.delete_dissolve_request.get().is_none()
@@ -242,6 +245,7 @@ impl ViewState {
             }
             BrowserEvent::DeletionFinished { succeeded } => {
                 self.prune_stale_search_results();
+                self.finish_docked_file_operation_animation(request_id, *succeeded);
                 if self.delete_dissolve_request.get() == Some(request_id) {
                     self.play_pending_delete_dissolve(*succeeded);
                 }
@@ -256,6 +260,7 @@ impl ViewState {
                     background.delete_entries.clone(),
                     retryable_locations,
                 );
+                self.finish_docked_file_operation_animation(request_id, false);
                 if self.delete_dissolve_request.get() == Some(request_id) {
                     self.settle_pending_delete_dissolve();
                 }
@@ -299,6 +304,7 @@ impl ViewState {
                 true
             }
             BrowserEvent::OperationFailed { message, .. } => {
+                self.finish_docked_file_operation_animation(request_id, false);
                 if self.delete_dissolve_request.get() == Some(request_id) {
                     self.settle_pending_delete_dissolve();
                 }
@@ -311,6 +317,7 @@ impl ViewState {
                 not_attempted,
                 affected_locations,
             } => {
+                self.finish_docked_file_operation_animation(request_id, false);
                 if self.delete_dissolve_request.get() == Some(request_id) {
                     self.settle_pending_delete_dissolve();
                 }
