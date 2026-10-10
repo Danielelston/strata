@@ -19,6 +19,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod deletion;
+
 struct Fixture {
     temp: tempfile::TempDir,
     view: BrowserView,
@@ -107,16 +109,18 @@ impl Fixture {
             .last_started_operation()
             .expect("transfer started")
     }
-    fn progress(&self, id: OperationRequestId) -> Rc<FileProgressState> {
-        let progress = self
-            .view
+    fn progress_state(&self, id: OperationRequestId) -> Rc<FileProgressState> {
+        self.view
             .state
             .background_file_progress
             .borrow()
             .get(&id)
             .expect("automatically docked job")
             .progress
-            .clone();
+            .clone()
+    }
+    fn progress(&self, id: OperationRequestId) -> Rc<FileProgressState> {
+        let progress = self.progress_state(id);
         pump_until(|| progress.file_progress_view.borrow().is_some());
         progress
     }
@@ -302,7 +306,15 @@ fn docked_copy_archive_and_deletion_update_and_cancel_independently() {
                 .expect("archive started");
             let archive_progress = fixture.progress(archive);
             let deleted = entry(Location::local(fixture.temp.path().join("deleted.txt")));
-            fixture.view.browser().delete(vec![deleted.clone()], false);
+            fixture.view.browser().delete(
+                vec![
+                    deleted.clone(),
+                    entry(Location::local(
+                        fixture.temp.path().join("another-deleted.txt"),
+                    )),
+                ],
+                false,
+            );
             let deletion = fixture
                 .view
                 .browser()
@@ -325,6 +337,19 @@ fn docked_copy_archive_and_deletion_update_and_cancel_independently() {
             fixture.update(second, "second.txt", 70);
             pump_until(|| second_card.status.text() == "70%");
             assert_eq!(progress_card(&archive_progress).status.text(), "50%");
+            assert_eq!(progress_card(&archive_progress).meta.text(), "1 / 2 files");
+            fixture.operations.emit(
+                deletion,
+                OperationEvent::DeleteProgress {
+                    request_id: deletion,
+                    completed: 1,
+                    total: 2,
+                    deleted_locations: vec![deleted.location.clone()],
+                },
+            );
+            let deletion_card = progress_card(&deletion_progress);
+            assert_eq!(deletion_card.status.text(), "50%");
+            assert!(deletion_card.meta.text().is_empty());
             assert_eq!(
                 progress_card(&deletion_progress).destination.text(),
                 "→ Trash"
@@ -369,163 +394,6 @@ fn docked_copy_archive_and_deletion_update_and_cancel_independently() {
                     .contains_key(&first)
             );
             assert!(crate::ui::window::visible_modal_layer(&fixture.window).is_none());
-        },
-    );
-}
-
-#[test]
-fn docked_deletion_keeps_its_animation_until_its_own_terminal_event() {
-    crate::test_support::gtk_test(
-        "ui::browser::progress::tests::minimization::docked_deletion_keeps_its_animation_until_its_own_terminal_event",
-        || {
-            for outcome in ["success", "unsuccessful", "failed", "cancelled", "partial"] {
-                let fixture = Fixture::new();
-                let copy = fixture.transfer("copy.txt", false);
-                fixture.progress(copy);
-                let (deleted, source) = fixture.prepare_deletion();
-                fixture.view.browser().delete(vec![deleted], true);
-                let deletion = fixture
-                    .view
-                    .browser()
-                    .last_started_operation()
-                    .expect("deletion started");
-                let progress = fixture.progress(deletion);
-                let card = progress_card(&progress);
-                let state = &fixture.view.state;
-                assert!(state.pending_delete_dissolve.borrow().is_some());
-                assert_eq!(source.opacity(), 0.0);
-                state.handle_background_file_operation(
-                    copy,
-                    &crate::app::BrowserEvent::OperationFailed {
-                        message: "Unrelated copy failure".into(),
-                        password_failure: None,
-                    },
-                );
-                assert!(state.pending_delete_dissolve.borrow().is_some());
-                assert_eq!(source.opacity(), 0.0);
-                fixture.view.browser().delete(
-                    vec![entry(Location::local(
-                        fixture.temp.path().join("other.txt"),
-                    ))],
-                    false,
-                );
-                let other_deletion = fixture
-                    .view
-                    .browser()
-                    .last_started_operation()
-                    .expect("other deletion started");
-                fixture.progress(other_deletion);
-                state.handle_background_file_operation(
-                    other_deletion,
-                    &crate::app::BrowserEvent::DeletionFinished { succeeded: true },
-                );
-                assert!(state.pending_delete_dissolve.borrow().is_some());
-                assert_eq!(source.opacity(), 0.0);
-                let event = match outcome {
-                    "success" => crate::app::BrowserEvent::DeletionFinished { succeeded: true },
-                    "unsuccessful" => {
-                        crate::app::BrowserEvent::DeletionFinished { succeeded: false }
-                    }
-                    "failed" => crate::app::BrowserEvent::OperationFailed {
-                        message: "Delete failed".into(),
-                        password_failure: None,
-                    },
-                    "cancelled" => crate::app::BrowserEvent::OperationCancelled {
-                        completed: 0,
-                        failed: 0,
-                        not_attempted: 1,
-                        affected_locations: Default::default(),
-                    },
-                    _ => crate::app::BrowserEvent::OperationCompletedWithErrors {
-                        message: "Partial deletion".into(),
-                        retryable_locations: Vec::new(),
-                        has_non_retryable_failures: true,
-                    },
-                };
-                state.handle_background_file_operation(deletion, &event);
-                assert!(state.pending_delete_dissolve.borrow().is_none());
-                if outcome == "success" {
-                    assert_eq!(card.title.text(), "Deletion complete");
-                    assert_eq!(source.opacity(), 0.0);
-                }
-                pump_until(|| source.opacity() == 1.0);
-                assert!(state.deferred_delete_empty_depth.get().is_none());
-            }
-        },
-    );
-}
-
-#[test]
-fn docked_trash_move_plays_its_flight_only_when_it_succeeds() {
-    crate::test_support::gtk_test(
-        "ui::browser::progress::tests::minimization::docked_trash_move_plays_its_flight_only_when_it_succeeds",
-        || {
-            for outcome in ["success", "unsuccessful", "cancelled"] {
-                let fixture = Fixture::new();
-                let copy = fixture.transfer("copy.txt", false);
-                fixture.progress(copy);
-                let trash = gtk::Button::with_label("Trash");
-                trash.set_halign(gtk::Align::End);
-                trash.set_valign(gtk::Align::End);
-                fixture
-                    .window
-                    .child()
-                    .and_downcast::<gtk::Overlay>()
-                    .expect("window overlay")
-                    .add_overlay(&trash);
-                let state = &fixture.view.state;
-                state.trash_button.set(Some(&trash));
-                let (moved, _) = fixture.prepare_deletion();
-                state.pending_delete_dissolve.take();
-                state.request_delete(vec![moved], false);
-                let deletion = fixture
-                    .view
-                    .browser()
-                    .last_started_operation()
-                    .expect("trash move started");
-                fixture.progress(deletion);
-                assert!(
-                    state.pending_file_operation_animation.borrow().is_some(),
-                    "docking a trash move keeps its flight"
-                );
-                state.handle_background_file_operation(
-                    copy,
-                    &crate::app::BrowserEvent::OperationFailed {
-                        message: "Unrelated copy failure".into(),
-                        password_failure: None,
-                    },
-                );
-                assert!(state.pending_file_operation_animation.borrow().is_some());
-                state.handle(&crate::app::BrowserEvent::OperationFailed {
-                    message: "Unrelated foreground failure".into(),
-                    password_failure: None,
-                });
-                pump_until(|| crate::ui::window::visible_modal_layer(&fixture.window).is_some());
-                assert!(
-                    state.pending_file_operation_animation.borrow().is_some(),
-                    "a foreground failure leaves the docked move's flight alone"
-                );
-                let event = match outcome {
-                    "success" => crate::app::BrowserEvent::DeletionFinished { succeeded: true },
-                    "unsuccessful" => {
-                        crate::app::BrowserEvent::DeletionFinished { succeeded: false }
-                    }
-                    _ => crate::app::BrowserEvent::OperationCancelled {
-                        completed: 0,
-                        failed: 0,
-                        not_attempted: 1,
-                        affected_locations: Default::default(),
-                    },
-                };
-                state.handle_background_file_operation(deletion, &event);
-                assert!(state.pending_file_operation_animation.borrow().is_none());
-                assert_eq!(
-                    trash.has_css_class("trash-receiving"),
-                    outcome == "success",
-                    "only a successful move flies its items into the Trash"
-                );
-                pump_until(|| !trash.has_css_class("trash-receiving"));
-            }
         },
     );
 }

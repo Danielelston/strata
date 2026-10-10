@@ -257,8 +257,6 @@ pub(super) struct ViewState {
     /// permanent-delete retry for exactly those entries.
     pending_delete_entries: RefCell<Vec<FileEntry>>,
     pending_file_operation_animation: RefCell<Option<fly_to_trash::PreparedFlight>>,
-    /// The docked deletion that owns the pending flight, which plays when it succeeds.
-    file_operation_animation_request: Cell<Option<crate::services::OperationRequestId>>,
     /// Visible permanent-delete rows captured before the operation mutates the model.
     pending_delete_dissolve: RefCell<Option<(usize, dissolve_delete::PreparedDissolve)>>,
     delete_dissolve_request: Cell<Option<crate::services::OperationRequestId>>,
@@ -646,7 +644,6 @@ impl BrowserView {
             pending_archive_destination: RefCell::new(None),
             pending_delete_entries: RefCell::new(Vec::new()),
             pending_file_operation_animation: RefCell::new(None),
-            file_operation_animation_request: Cell::new(None),
             pending_delete_dissolve: RefCell::new(None),
             delete_dissolve_request: Cell::new(None),
             deferred_delete_empty_depth: Cell::new(None),
@@ -2038,10 +2035,12 @@ impl BrowserView {
         let animation = source.zip(trash_button).and_then(|(source, trash_button)| {
             fly_to_trash::prepare_fly_from_trash(&source, entries.iter(), &trash_button)
         });
-        self.state.set_pending_file_operation_animation(animation);
+        self.state
+            .pending_file_operation_animation
+            .replace(animation);
         let undone = self.state.browser.undo_last_trash();
         if !undone {
-            self.state.set_pending_file_operation_animation(None);
+            self.state.pending_file_operation_animation.take();
         }
         undone
     }
