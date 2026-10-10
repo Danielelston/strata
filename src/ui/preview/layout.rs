@@ -13,14 +13,18 @@ use crate::ui::{
 
 const MIN_SPLIT_PREVIEW_WIDTH: i32 = 240;
 const RAIL_RELEASE_MARGIN: i32 = 24;
+const OUTLINE_FADE: std::time::Duration = std::time::Duration::from_millis(150);
 
 #[derive(Default)]
 pub(super) struct SplitSizing {
     binding: RefCell<Option<BrowserBinding>>,
     manual_width: Cell<Option<i32>>,
     resizing: Cell<bool>,
+    /// A pointer, not the keyboard, is dragging the divider.
+    dragging: Cell<bool>,
     /// The divider position a resize restored, which GTK reports back afterwards.
     restored_position: Cell<Option<i32>>,
+    minimum_outline: RefCell<Option<gtk::Box>>,
     suspended: Cell<bool>,
     resume_media: Cell<bool>,
     reload_on_resume: Cell<bool>,
@@ -838,10 +842,14 @@ impl PreviewState {
         });
     }
 
-    pub(super) fn resize_preview(self: &Rc<Self>, split: &gtk::Paned, position: i32) {
+    pub(super) fn resize_preview(
+        self: &Rc<Self>,
+        split: &gtk::Paned,
+        position: i32,
+    ) -> Option<i32> {
         let geometry = self.geometry(split);
         if !geometry.can_show_preview() {
-            return;
+            return None;
         }
         let lent = if self.slot_is_empty() {
             geometry.trailing
@@ -852,6 +860,73 @@ impl PreviewState {
             .clamp(geometry.minimum_width(true), geometry.maximum_width());
         self.sizing.manual_width.set(Some(width));
         self.sync_split(split);
+        Some(width)
+    }
+
+    /// A drag asking for less than the space the preview fills only lowers the
+    /// session minimum, so the panel stays put and an outline shows that minimum.
+    fn show_minimum_outline(&self, split: &gtk::Paned, width: i32) {
+        let geometry = self.geometry(split);
+        let shown = geometry.available - geometry.separator - split.position();
+        let overlay = crate::ui::modal::window_overlay(split);
+        let bounds = overlay
+            .as_ref()
+            .and_then(|overlay| split.compute_bounds(overlay));
+        let (Some(overlay), Some(bounds)) = (overlay, bounds) else {
+            return;
+        };
+        if !self.revealer.reveals_child() || width >= shown {
+            self.remove_minimum_outline();
+            return;
+        }
+        let outline = self
+            .sizing
+            .minimum_outline
+            .borrow_mut()
+            .get_or_insert_with(|| {
+                let outline = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                outline.add_css_class("preview-minimum-outline");
+                outline.set_can_target(false);
+                outline.set_halign(gtk::Align::Start);
+                outline.set_valign(gtk::Align::Start);
+                let label = gtk::Label::new(Some(&crate::i18n::tr("Minimum width")));
+                label.add_css_class("preview-minimum-outline-label");
+                label.set_halign(gtk::Align::Center);
+                outline.append(&label);
+                overlay.add_overlay(&outline);
+                outline
+            })
+            .clone();
+        outline.set_margin_start((bounds.x() + bounds.width()).round() as i32 - width);
+        outline.set_margin_top(bounds.y().round() as i32);
+        outline.set_size_request(width, bounds.height().round() as i32);
+    }
+
+    fn fade_minimum_outline(&self) {
+        let Some(outline) = self.sizing.minimum_outline.take() else {
+            return;
+        };
+        let Some(overlay) = outline.parent().and_downcast::<gtk::Overlay>() else {
+            return;
+        };
+        if !super::super::motion::animations_enabled() {
+            overlay.remove_overlay(&outline);
+            return;
+        }
+        outline.add_css_class("fading");
+        glib::timeout_add_local_once(OUTLINE_FADE, move || {
+            if outline.parent().is_some() {
+                overlay.remove_overlay(&outline);
+            }
+        });
+    }
+
+    fn remove_minimum_outline(&self) {
+        if let Some(outline) = self.sizing.minimum_outline.take()
+            && let Some(overlay) = outline.parent().and_downcast::<gtk::Overlay>()
+        {
+            overlay.remove_overlay(&outline);
+        }
     }
 }
 
@@ -882,6 +957,7 @@ fn install_resize(split: &gtk::Paned, state: &Rc<PreviewState>) {
                     .set(state.animation_generation.get().saturating_add(1));
                 state.animating.set(false);
                 state.sizing.resizing.set(true);
+                state.sizing.dragging.set(true);
                 let minimum = state.geometry(&split).minimum_width(true);
                 state.pane.set_width_request(minimum);
                 state.slot.set_width_request(minimum);
@@ -891,6 +967,9 @@ fn install_resize(split: &gtk::Paned, state: &Rc<PreviewState>) {
             | gtk::gdk::EventType::TouchCancel
             | gtk::gdk::EventType::GrabBroken => {
                 state.sizing.resizing.set(false);
+                if state.sizing.dragging.replace(false) {
+                    state.fade_minimum_outline();
+                }
             }
             _ => {}
         }
@@ -905,10 +984,15 @@ fn install_resize(split: &gtk::Paned, state: &Rc<PreviewState>) {
             && state.sizing.resizing.replace(false)
         {
             let dragged = split.position();
-            state.resize_preview(split, dragged);
+            let requested = state.resize_preview(split, dragged);
             if split.position() != dragged {
                 // Filling the free space put the divider back; that echo is not a resize.
                 state.sizing.restored_position.set(Some(split.position()));
+            }
+            if state.sizing.dragging.get()
+                && let Some(width) = requested
+            {
+                state.show_minimum_outline(split, width);
             }
             state.sizing.resizing.set(true);
         }

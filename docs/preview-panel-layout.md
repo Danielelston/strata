@@ -70,7 +70,9 @@ Constants live in `src/ui/preview/layout.rs` and `src/ui/preview.rs`.
   keyboard. In Columns it becomes the session's minimum: the preview still
   fills the free space beside the focused column when there is more room, so
   no gap opens between them, and gives way to the columns only down to that
-  width. In Icons and List it is the preview's width. It is window-local and
+  width. Dragging narrower than the space the preview fills leaves the panel in
+  place and outlines the minimum being set, captioned **Minimum width**, until
+  the drag ends. In Icons and List it is the preview's width. It is window-local and
   session-local: it survives closing, reopening, and folder changes, and is
   forgotten when the window closes. A manual width can go down to one column
   but never below the hide threshold.
@@ -164,6 +166,7 @@ has trailing columns, so the right-pane rules above do not apply.
 | Opening or reopening a folder by click focuses its column, for one or two clicks | `tests/e2e/scenarios/test_click_modes.py::test_double_click_leaves_the_folder_open_and_focused`, `test_clicking_an_open_folder_focuses_its_column` |
 | Pointer preview closes deeper columns first | `src/app/browser/tests/navigation.rs::previewing_a_file_in_a_parent_column_closes_deeper_columns_before_requesting` |
 | Automatic width, minimum, and session manual minimum | `test_quick_preview.py::test_column_preview_fills_free_space_and_keeps_a_dragged_session_minimum` |
+| Narrowing a filled preview outlines the minimum and keeps the panel | `test_quick_preview.py::test_dragging_a_filled_column_preview_narrower_outlines_the_new_minimum`, `src/ui/preview/tests.rs::keyboard_divider_moves_lower_the_columns_session_minimum_without_moving_the_panel` |
 | Reservation survives closing; Appearance releases it | `test_quick_preview.py::test_columns_preview_can_reopen_after_closing`, `tests/e2e/scenarios/test_preview_session.py::test_preview_mode_survives_unsupported_selections_and_matches_appearance` |
 | Narrow windows shrink then hide the preview | `test_quick_preview.py::test_narrow_window_prioritizes_the_last_column_and_restores_the_latest_preview` |
 | Peek strips reveal clipped columns | `test_preview_session.py::test_peek_click_reveals_a_column_without_activating_rows_or_toolbar_actions` |

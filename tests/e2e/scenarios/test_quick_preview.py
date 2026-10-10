@@ -733,6 +733,43 @@ def test_column_preview_fills_free_space_and_keeps_a_dragged_session_minimum(str
 
 
 @pytest.mark.preferences(browser_mode="columns", single_click_previews=False)
+def test_dragging_a_filled_column_preview_narrower_outlines_the_new_minimum(strata):
+    def outline():
+        return strata.window.find(role="label", name="Minimum width")
+
+    def adjacent():
+        column = strata.containers()[-1].screen_bounds()
+        preview = strata.preview().screen_bounds()
+        return abs(preview.x - (column.x + column.width)) <= 3
+
+    strata.select_entry_with_keyboard("notes.txt")
+    strata.keyboard.press("space")
+    strata.wait(lambda: strata.preview_shows("the quick brown fox"), "the first preview")
+    strata.wait(adjacent, "the preview to fill the space beside the column")
+    filled = strata.preview().screen_bounds()
+    start = (filled.x - 1, filled.y + filled.height // 2)
+    distance = filled.width // 3
+    strata.pointer.drag_points(start, (start[0] + distance, start[1]), release=False)
+    try:
+        strata.wait(lambda: outline() is not None, "the minimum width outline")
+        assert abs(strata.preview().screen_bounds().width - filled.width) <= 2, "the panel stays put"
+    finally:
+        strata.pointer.connection.button(1, False)
+    strata.wait(lambda: outline() is None, "the outline to go once the drag ends")
+    assert abs(strata.preview().screen_bounds().width - filled.width) <= 2
+
+    strata.keyboard.press("space")
+    strata.open_directory("folder")
+    strata.select_entry_with_keyboard("inner.txt")
+    strata.keyboard.press("space")
+    strata.wait(lambda: strata.preview_shows("inner"), "the nested preview")
+    strata.wait(
+        lambda: abs(strata.preview().screen_bounds().width - (filled.width - distance)) <= 4,
+        "the dragged minimum to hold where the columns need the space",
+    )
+
+
+@pytest.mark.preferences(browser_mode="columns", single_click_previews=False)
 def test_columns_preview_can_reopen_after_closing(strata):
     strata.open_directory("folder")
     strata.wait_for_entries(sorted(PREVIEW_FIXTURE["folder"]), "folder")

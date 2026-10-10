@@ -3107,6 +3107,26 @@ paned > separator {
   padding: 24px;
 }
 
+.preview-minimum-outline {
+  background: alpha(@strata_accent, 0.08);
+  border: 2px dashed @strata_accent;
+  border-radius: 6px;
+  transition: opacity 150ms ease-out;
+}
+
+.preview-minimum-outline.fading {
+  opacity: 0;
+}
+
+.preview-minimum-outline-label {
+  margin-top: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: @strata_accent;
+  color: @strata_bg;
+  font-weight: 600;
+}
+
 .preview-feedback-icon {
   margin-bottom: 5px;
 }
