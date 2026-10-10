@@ -2357,7 +2357,8 @@ paned > separator {
   background: transparent;
 }
 
-.preview-resize-grip:hover {
+.preview-resize-grip:hover,
+.preview-resize-grip.resize-hover {
   background: alpha(@strata_accent, 0.18);
 }
 

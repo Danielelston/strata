@@ -921,6 +921,8 @@ impl PreviewState {
         self.animating.set(false);
         self.sizing.resizing.set(true);
         self.sizing.dragging.set(true);
+        // The outline names the minimum from here on.
+        self.sizing.grip_hint.hide();
         let minimum = self.geometry(split).minimum_width(true);
         self.pane.set_width_request(minimum);
         self.slot.set_width_request(minimum);
@@ -963,38 +965,7 @@ fn install_resize_grip(split: &gtk::Paned, state: &Rc<PreviewState>) {
     follow_reveal(&state.revealer);
     state.revealer.connect_reveal_child_notify(follow_reveal);
 
-    let hover = gtk::EventControllerMotion::new();
-    let hovered_split = split.downgrade();
-    let hovered = Rc::downgrade(state);
-    hover.connect_enter(move |_, _, _| {
-        if let Some(handle) = hovered_split.upgrade().and_then(|split| separator(&split)) {
-            handle.add_css_class("resize-hover");
-        }
-        if let Some(state) = hovered.upgrade() {
-            let grip = state.resize_grip.downgrade();
-            state.sizing.grip_hint.hover(
-                &state.resize_grip,
-                "Preview panel minimum width",
-                Rc::new(move |overlay| {
-                    let bounds = grip.upgrade()?.compute_bounds(overlay)?;
-                    Some((bounds.x(), bounds.y()))
-                }),
-            );
-        }
-    });
-    let left_split = split.downgrade();
-    let left = Rc::downgrade(state);
-    hover.connect_leave(move |_| {
-        if let Some(handle) = left_split.upgrade().and_then(|split| separator(&split)) {
-            handle.remove_css_class("resize-hover");
-        }
-        if let Some(state) = left.upgrade()
-            && !state.sizing.dragging.get()
-        {
-            state.sizing.grip_hint.hide();
-        }
-    });
-    state.resize_grip.add_controller(hover);
+    install_edge_hover(split, state);
 
     let drag = gtk::GestureDrag::new();
     drag.set_button(1);
@@ -1015,8 +986,6 @@ fn install_resize_grip(split: &gtk::Paned, state: &Rc<PreviewState>) {
             return;
         }
         gesture.set_state(gtk::EventSequenceState::Claimed);
-        // The outline names the minimum from here on.
-        state.sizing.grip_hint.hide();
         state.begin_divider_drag(&split);
         begun.set(Some((split.position(), pointer_x)));
     });
@@ -1049,6 +1018,75 @@ fn install_resize_grip(split: &gtk::Paned, state: &Rc<PreviewState>) {
         }
     });
     state.resize_grip.add_controller(drag);
+}
+
+/// The divider line also drags the divider, so it shares the grip's hover: each
+/// lights the other, and both show one caption.
+fn install_edge_hover(split: &gtk::Paned, state: &Rc<PreviewState>) {
+    let Some(divider) = separator(split) else {
+        return;
+    };
+    let hovers = [
+        gtk::EventControllerMotion::new(),
+        gtk::EventControllerMotion::new(),
+    ];
+    let watched: Rc<[glib::WeakRef<gtk::EventControllerMotion>]> =
+        hovers.iter().map(|hover| hover.downgrade()).collect();
+    let partners = [
+        state.resize_grip.clone().upcast::<gtk::Widget>(),
+        divider.clone(),
+    ];
+    for (hover, partner) in hovers.iter().zip(partners) {
+        let partner_for_enter = partner.downgrade();
+        let hovered = Rc::downgrade(state);
+        hover.connect_enter(move |_, _, _| {
+            let Some(state) = hovered.upgrade() else {
+                return;
+            };
+            if !state.resize_grip.is_visible() {
+                return;
+            }
+            if let Some(partner) = partner_for_enter.upgrade() {
+                partner.add_css_class("resize-hover");
+            }
+            let grip = state.resize_grip.downgrade();
+            state.sizing.grip_hint.hover(
+                &state.resize_grip,
+                "Preview panel minimum width",
+                Rc::new(move |overlay| {
+                    let bounds = grip.upgrade()?.compute_bounds(overlay)?;
+                    Some((bounds.x(), bounds.y()))
+                }),
+            );
+        });
+        let partner = partner.downgrade();
+        let left = Rc::downgrade(state);
+        let watched = watched.clone();
+        hover.connect_leave(move |_| {
+            if let Some(partner) = partner.upgrade() {
+                partner.remove_css_class("resize-hover");
+            }
+            let left = left.clone();
+            let watched = watched.clone();
+            // Crossing between the line and the grip leaves one before entering the other.
+            glib::idle_add_local_once(move || {
+                let still_on_edge = watched.iter().any(|hover| {
+                    hover
+                        .upgrade()
+                        .is_some_and(|hover| hover.contains_pointer())
+                });
+                if let Some(state) = left.upgrade()
+                    && !still_on_edge
+                    && !state.sizing.dragging.get()
+                {
+                    state.sizing.grip_hint.hide();
+                }
+            });
+        });
+    }
+    let [divider_hover, grip_hover] = hovers;
+    divider.add_controller(divider_hover);
+    state.resize_grip.add_controller(grip_hover);
 }
 
 fn install_resize(split: &gtk::Paned, state: &Rc<PreviewState>) {

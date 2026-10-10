@@ -67,9 +67,12 @@ Constants live in `src/ui/preview/layout.rs` and `src/ui/preview.rs`.
 - **Automatic width in Icons and List** is 90% of half the content width,
   clamped to the minimum and maximum.
 - **The column–preview boundary** splits by side. The last 6 px inside the
-  column that meets the preview resize that column, and the first 6 px inside
-  the preview are the divider's grip. Hovering either side lights the line;
-  the grip also tints its strip, so the preview side is told apart. Resting
+  column that meets the preview resize that column, except its last pixel,
+  where the divider's 1 px line is drawn. That line and the first 6 px inside
+  the preview, the divider's grip, form the preview side. Hovering either side
+  lights the line; the preview side also tints the grip's strip, so the two
+  sides are told apart, and crossing between the line and the grip keeps its
+  caption. Resting
   the pointer on either side for a moment shows a caption naming what a drag
   would change, **Column width** or **Preview panel minimum width**; a
   column's caption then follows its edge through the drag, and the preview's

@@ -770,16 +770,16 @@ def test_dragging_a_filled_column_preview_narrower_outlines_the_new_minimum(stra
 
 
 @pytest.mark.preferences(browser_mode="columns", single_click_previews=False)
-@pytest.mark.parametrize("side", ["column", "preview"])
-def test_the_column_preview_boundary_resizes_the_side_it_is_grabbed_from(strata, side):
+@pytest.mark.parametrize(("side", "offset"), [("column", -3), ("preview", -1), ("preview", 3)])
+def test_the_column_preview_boundary_resizes_the_side_it_is_grabbed_from(strata, side, offset):
     strata.select_entry_with_keyboard("notes.txt")
     strata.keyboard.press("space")
     strata.wait(lambda: strata.preview_shows("the quick brown fox"), "the first preview")
     strata.settle(strata.preview())
     column = strata.containers()[-1].screen_bounds()
     preview = strata.preview().screen_bounds()
-    x = preview.x - 3 if side == "column" else preview.x + 3
-    start = (x, preview.y + preview.height // 2)
+    # -1 is the divider line itself, drawn over the column's last pixel.
+    start = (preview.x + offset, preview.y + preview.height // 2)
     def caption(name):
         return strata.window.find(role="label", name=name)
 
