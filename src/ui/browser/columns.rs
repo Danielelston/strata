@@ -820,28 +820,27 @@ fn animate_column_entry(column: &gtk::Box, swapped: bool) {
 }
 
 fn animate_column_exit(state: &Rc<ViewState>, column: ColumnView, animation_id: u64) {
-    column.shell.add_css_class("column-exiting");
+    let ColumnView {
+        shell,
+        marquee,
+        animation_generation: generation,
+        ..
+    } = column;
+    let band = marquee.band();
+    shell.add_css_class("column-exiting");
+    // Its depth may already belong to a new column, so it must not take clicks or drops.
+    shell.set_can_target(false);
     let weak = Rc::downgrade(state);
-    let generation = column.animation_generation.clone();
-    if !animations_enabled() {
-        state.columns_widget.remove(&column.shell);
-        state.overlay.remove_overlay(&column.marquee.band());
-        return;
-    }
     // Width and opacity are driven from the same tick (not a separate CSS
     // keyframe) so they never drift out of lockstep.
-    let start_width = column
-        .shell
-        .width()
-        .max(column.shell.width_request())
-        .max(0);
+    let start_width = shell.width().max(shell.width_request()).max(0);
     let started = Instant::now();
-    let shell = column.shell.downgrade();
-    let _tick = column.shell.clone().add_tick_callback(move |_, _| {
+    let weak_shell = shell.downgrade();
+    let _tick = shell.add_tick_callback(move |_, _| {
         if generation.get() != animation_id {
             return glib::ControlFlow::Break;
         }
-        let Some(widget) = shell.upgrade() else {
+        let Some(widget) = weak_shell.upgrade() else {
             return glib::ControlFlow::Break;
         };
         let progress =
@@ -857,8 +856,8 @@ fn animate_column_exit(state: &Rc<ViewState>, column: ColumnView, animation_id: 
         }
         widget.set_size_request(0, -1);
         if let Some(state) = weak.upgrade() {
-            state.columns_widget.remove(&column.shell);
-            state.overlay.remove_overlay(&column.marquee.band());
+            state.columns_widget.remove(&widget);
+            state.overlay.remove_overlay(&band);
         }
         glib::ControlFlow::Break
     });

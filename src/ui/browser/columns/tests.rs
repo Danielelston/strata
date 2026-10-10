@@ -392,6 +392,23 @@ fn close_column_defers_removal_until_exit_animation_then_removes_it() {
                 exiting.parent().is_some(),
                 "the widget stays in the tree while the exit animation plays"
             );
+            let scroller = fixture.scroller();
+            let bounds = exiting.compute_bounds(&scroller).expect("exiting bounds");
+            let left = bounds.x().max(0.0);
+            let right = (bounds.x() + bounds.width()).min(scroller.width() as f32);
+            assert!(
+                right - left > 2.0,
+                "part of the closing column is on screen"
+            );
+            let picked = scroller.pick(
+                f64::from((left + right) / 2.0),
+                f64::from(bounds.y() + bounds.height() / 2.0),
+                gtk::PickFlags::DEFAULT,
+            );
+            assert!(
+                picked.is_none_or(|picked| !picked.is_ancestor(&exiting) && picked != exiting),
+                "a closing column takes no clicks or drops meant for the column now at its depth"
+            );
             pump_until(
                 || exiting.parent().is_none(),
                 "exiting column removal after COLUMN_TRANSITION",
