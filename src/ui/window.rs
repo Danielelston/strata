@@ -32,7 +32,7 @@ use super::{
         arm_spring_load_navigation, file_drag_hover_target, file_drop_action, file_drop_commit,
         locations_from_file_list_value, prepare_file_drop_target, show_error_dialog,
     },
-    browser_modes::{BrowserMode, DensityValue},
+    browser_modes::BrowserMode,
     controls::{ModalTone, focus_button, message_dialog_description, message_dialog_layout},
     keys::{
         KeyPress,
@@ -49,6 +49,7 @@ use super::{
 
 mod bookmarks;
 mod composition;
+mod density_slider;
 mod device_labels;
 mod device_release;
 mod devices;
@@ -902,29 +903,17 @@ pub(super) fn build_appearance_menu(
     let hidden_files_shown = preferences.sort_preferences().show_hidden;
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     append_menu_heading(&content, &crate::i18n::tr("DENSITY"));
-    content.append(&density_accordion(
+    content.append(&density_slider::density_slider(
         &preferences,
         "Content",
-        "Content custom spacing, in pixels",
         PreferenceManager::browser_density,
         PreferenceManager::set_browser_density,
-        PreferenceManager::browser_density_custom_px,
     ));
-    content.append(&density_accordion(
+    content.append(&density_slider::density_slider(
         &preferences,
-        "Top Bar",
-        "Top Bar custom spacing, in pixels",
-        PreferenceManager::frame_top_bar_density,
-        PreferenceManager::set_frame_top_bar_density,
-        PreferenceManager::frame_top_bar_density_custom_px,
-    ));
-    content.append(&density_accordion(
-        &preferences,
-        "Side Bar",
-        "Side Bar custom spacing, in pixels",
-        PreferenceManager::frame_side_bar_density,
-        PreferenceManager::set_frame_side_bar_density,
-        PreferenceManager::frame_side_bar_density_custom_px,
+        "Frame",
+        PreferenceManager::frame_density,
+        PreferenceManager::set_frame_density,
     ));
 
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
@@ -1103,180 +1092,6 @@ fn append_menu_heading(container: &gtk::Box, text: &str) {
     heading.set_xalign(0.0);
     heading.add_css_class("menu-heading");
     container.append(&heading);
-}
-
-/// A collapsed row (name + current value + disclosure arrow) that expands IN PLACE
-/// into Compact/Airy/custom-px options, pushing later menu content down. Mirrors the
-/// `gtk::Revealer` accordion pattern already used by Settings' release-notes toggle;
-/// never opens a nested popover and never closes the Appearance menu.
-fn density_accordion<D: DensityValue>(
-    preferences: &Rc<PreferenceManager>,
-    row_name: &str,
-    custom_accessible_name: &str,
-    get: fn(&PreferenceManager) -> D,
-    set: fn(&PreferenceManager, D),
-    get_custom_px: fn(&PreferenceManager) -> u8,
-) -> gtk::Box {
-    let (custom_min, custom_max) = D::custom_bounds();
-    let wrapper = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    wrapper.add_css_class("appearance-density-accordion");
-
-    let header = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    let name_label = gtk::Label::new(Some(&crate::i18n::tr(row_name)));
-    name_label.set_xalign(0.0);
-    name_label.set_hexpand(true);
-    let value_label = gtk::Label::new(None);
-    value_label.add_css_class("appearance-density-value");
-    let chevron = crate::assets::primary_icon(crate::assets::icons::CHEVRON_RIGHT, 14);
-    chevron.add_css_class("appearance-density-chevron");
-    header.append(&name_label);
-    header.append(&value_label);
-    header.append(&chevron);
-    let toggle = gtk::Button::builder()
-        .child(&header)
-        .has_frame(false)
-        .build();
-    toggle.add_css_class("appearance-option");
-    toggle.add_css_class("appearance-density-toggle");
-    super::accessibility::set_label(&toggle, &crate::i18n::tr(row_name));
-    toggle.update_state(&[gtk::accessible::State::Expanded(Some(false))]);
-    preferences.bind_preference(&value_label, get, |widget, density: D| {
-        widget
-            .downcast_ref::<gtk::Label>()
-            .expect("density value label")
-            .set_text(&density_value_text(density));
-    });
-
-    let (compact, compact_check, _) = appearance_option(
-        crate::assets::icons::ROWS,
-        "Compact",
-        get(preferences).is_compact(),
-        true,
-        gtk::AccessibleRole::MenuItemRadio,
-    );
-    let (airy, airy_check, _) = appearance_option(
-        crate::assets::icons::ROWS,
-        "Airy",
-        get(preferences).is_airy(),
-        true,
-        gtk::AccessibleRole::MenuItemRadio,
-    );
-    preferences.bind_preference(&compact_check, get, |widget, density: D| {
-        widget.set_visible(density.is_compact());
-    });
-    preferences.bind_preference(&airy_check, get, |widget, density: D| {
-        widget.set_visible(density.is_airy());
-    });
-    {
-        let preferences = preferences.clone();
-        compact.connect_clicked(move |_| set(&preferences, D::compact()));
-    }
-    {
-        let preferences = preferences.clone();
-        airy.connect_clicked(move |_| set(&preferences, D::airy()));
-    }
-
-    let custom_row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(10)
-        .accessible_role(gtk::AccessibleRole::Group)
-        .build();
-    custom_row.add_css_class("appearance-option");
-    custom_row.add_css_class("appearance-density-custom-row");
-    super::accessibility::set_label(&custom_row, &crate::i18n::tr("Custom"));
-    let custom_check = crate::assets::primary_icon(crate::assets::icons::CHECK, 16);
-    custom_check.set_visible(get(preferences).custom_px().is_some());
-    let custom_label = gtk::Label::new(Some(&crate::i18n::tr("Custom")));
-    custom_label.set_xalign(0.0);
-    custom_label.set_hexpand(true);
-    // Mirrors Text Size's [decrease][value][increase] stepper (see TEXT SIZE below) instead
-    // of a native GtkSpinButton, reusing the same shared control builder and CSS class.
-    let (custom_stepper, [decrease, value_display, increase]) = super::controls::stepper([
-        crate::i18n::tr("Decrease custom spacing"),
-        crate::i18n::tr(custom_accessible_name),
-        crate::i18n::tr("Increase custom spacing"),
-    ]);
-    custom_stepper.add_css_class("appearance-density-custom-stepper");
-    value_display.set_sensitive(false);
-    custom_row.append(&custom_check);
-    custom_row.append(&custom_label);
-    custom_row.append(&custom_stepper);
-    preferences.bind_preference(&custom_check, get, |widget, density: D| {
-        widget.set_visible(density.custom_px().is_some());
-    });
-    preferences.bind_preference(&custom_row, get, |widget, density: D| {
-        super::accessibility::set_checked(widget, density.custom_px().is_some());
-    });
-    {
-        let preferences = preferences.clone();
-        decrease.connect_clicked(move |_| {
-            set(
-                &preferences,
-                D::custom(get_custom_px(&preferences).saturating_sub(1)),
-            );
-        });
-    }
-    {
-        let preferences = preferences.clone();
-        increase.connect_clicked(move |_| {
-            set(
-                &preferences,
-                D::custom(get_custom_px(&preferences).saturating_add(1)),
-            );
-        });
-    }
-    preferences.bind_preference(&value_display, get_custom_px, |widget, px: u8| {
-        widget
-            .downcast_ref::<gtk::Button>()
-            .expect("density custom value display")
-            .set_label(&rust_i18n::t!("%{px} px", px = px));
-    });
-    preferences.bind_preference(&decrease, get_custom_px, move |widget, px: u8| {
-        widget.set_sensitive(px > custom_min);
-    });
-    preferences.bind_preference(&increase, get_custom_px, move |widget, px: u8| {
-        widget.set_sensitive(px < custom_max);
-    });
-
-    let options = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    options.add_css_class("appearance-density-options");
-    options.append(&compact);
-    options.append(&airy);
-    options.append(&custom_row);
-    let revealer = gtk::Revealer::builder()
-        .child(&options)
-        .transition_duration(0)
-        .reveal_child(false)
-        .build();
-
-    {
-        let revealer = revealer.clone();
-        toggle.connect_clicked(move |button| {
-            let expanded = !revealer.reveals_child();
-            revealer.set_reveal_child(expanded);
-            button.update_state(&[gtk::accessible::State::Expanded(Some(expanded))]);
-            if expanded {
-                button.add_css_class("expanded");
-            } else {
-                button.remove_css_class("expanded");
-            }
-        });
-    }
-
-    wrapper.append(&toggle);
-    wrapper.append(&revealer);
-    wrapper
-}
-
-fn density_value_text<D: DensityValue>(density: D) -> String {
-    if density.is_compact() {
-        crate::i18n::tr("Compact")
-    } else if density.is_airy() {
-        crate::i18n::tr("Airy")
-    } else {
-        let px = density.custom_px().unwrap_or(0);
-        rust_i18n::t!("%{px} px", px = px).into_owned()
-    }
 }
 
 type RailListener = Rc<dyn Fn(bool)>;

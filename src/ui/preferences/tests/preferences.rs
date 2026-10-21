@@ -19,7 +19,7 @@ use crate::{
     services::SearchLimits,
     test_support::gtk_test,
     ui::{
-        browser_modes::{BrowserDensity, BrowserMode, ClickCount, FrameDensity},
+        browser_modes::{BrowserDensity, BrowserMode, ClickCount, DensityScale, FrameDensity},
         preferences::fixtures::{
             non_default_preferences, seed_omarchy_colors_for_test, seed_omarchy_for_test,
             seed_saved_preferences_for_test,
@@ -895,6 +895,7 @@ fn every_saved_preference_loads_before_any_settings_page_exists() {
             assert!(!crate::ui::motion::animations_enabled());
             assert_eq!(manager.browser_mode(), BrowserMode::List);
             assert_eq!(manager.browser_density(), BrowserDensity::Airy);
+            assert_eq!(manager.frame_density(), FrameDensity::Custom(6));
             assert!(manager.group_by_type());
             for mode in [BrowserMode::Columns, BrowserMode::Icons, BrowserMode::List] {
                 let activation = manager.click_activation(mode);
@@ -1295,12 +1296,9 @@ fn all_preference_setters_publish_and_persist_without_duplicate_notifications() 
                 |m| m.set_browser_mode(BrowserMode::Icons),
                 |m| m.set_browser_density(BrowserDensity::Custom(9)),
                 |m| m.set_browser_density(BrowserDensity::Compact),
-                |m| m.set_frame_top_bar_density(FrameDensity::Custom(7)),
-                |m| m.set_frame_top_bar_density(FrameDensity::Airy),
-                |m| m.set_frame_top_bar_density(FrameDensity::Compact),
-                |m| m.set_frame_side_bar_density(FrameDensity::Custom(5)),
-                |m| m.set_frame_side_bar_density(FrameDensity::Airy),
-                |m| m.set_frame_side_bar_density(FrameDensity::Compact),
+                |m| m.set_frame_density(FrameDensity::Custom(5)),
+                |m| m.set_frame_density(FrameDensity::Airy),
+                |m| m.set_frame_density(FrameDensity::Compact),
                 |m| m.set_group_by_type(false),
                 |m| {
                     m.set_click_activation(
@@ -1437,81 +1435,36 @@ fn all_preference_setters_publish_and_persist_without_duplicate_notifications() 
 }
 
 #[test]
-fn density_custom_values_default_to_four_and_persist_independently_per_area_and_mode() {
+fn density_sliders_save_snap_points_as_presets_and_other_values_as_custom() {
     gtk_test(
-        "ui::preferences::tests::preferences::density_custom_values_default_to_four_and_persist_independently_per_area_and_mode",
+        "ui::preferences::tests::preferences::density_sliders_save_snap_points_as_presets_and_other_values_as_custom",
         || {
             let manager = PreferenceManager::shared();
-
-            // First-ever Custom value is 4px in each of the three independent areas
-            // (Content, Frame's Top Bar, Frame's Side Bar), and all start Compact.
             assert_eq!(manager.browser_density(), BrowserDensity::Compact);
-            assert_eq!(manager.browser_density_custom_px(), 4);
-            assert_eq!(manager.frame_top_bar_density(), FrameDensity::Compact);
-            assert_eq!(manager.frame_top_bar_density_custom_px(), 4);
-            assert_eq!(manager.frame_side_bar_density(), FrameDensity::Compact);
-            assert_eq!(manager.frame_side_bar_density_custom_px(), 4);
+            assert_eq!(manager.frame_density(), FrameDensity::Compact);
 
-            // Selecting Content Custom never touches Top Bar's or Side Bar's stored
-            // value, and vice versa for each pairing.
-            manager.set_browser_density(BrowserDensity::Custom(11));
+            manager.set_browser_density(BrowserDensity::from_px(11));
+            manager.set_frame_density(FrameDensity::from_px(4));
+            {
+                let saved = manager.preferences.borrow();
+                assert_eq!(saved.browser_density, "custom");
+                assert_eq!(saved.browser_density_custom_px, 11);
+                assert_eq!(saved.frame_density, "airy");
+            }
             assert_eq!(manager.browser_density(), BrowserDensity::Custom(11));
-            assert_eq!(manager.browser_density_custom_px(), 11);
-            assert_eq!(manager.frame_top_bar_density(), FrameDensity::Compact);
-            assert_eq!(manager.frame_top_bar_density_custom_px(), 4);
-            assert_eq!(manager.frame_side_bar_density(), FrameDensity::Compact);
-            assert_eq!(manager.frame_side_bar_density_custom_px(), 4);
+            assert_eq!(manager.frame_density(), FrameDensity::Airy);
 
-            manager.set_frame_top_bar_density(FrameDensity::Custom(7));
-            assert_eq!(manager.frame_top_bar_density(), FrameDensity::Custom(7));
-            assert_eq!(manager.frame_top_bar_density_custom_px(), 7);
-            assert_eq!(manager.browser_density(), BrowserDensity::Custom(11));
-            assert_eq!(manager.browser_density_custom_px(), 11);
-            assert_eq!(manager.frame_side_bar_density(), FrameDensity::Compact);
-            assert_eq!(manager.frame_side_bar_density_custom_px(), 4);
+            manager.set_browser_density(BrowserDensity::Custom(4));
+            assert_eq!(manager.preferences.borrow().browser_density, "compact");
+            assert_eq!(manager.browser_density(), BrowserDensity::Compact);
+            assert_eq!(
+                manager.frame_density(),
+                FrameDensity::Airy,
+                "content changes leave the frame alone"
+            );
 
-            manager.set_frame_side_bar_density(FrameDensity::Custom(5));
-            assert_eq!(manager.frame_side_bar_density(), FrameDensity::Custom(5));
-            assert_eq!(manager.frame_side_bar_density_custom_px(), 5);
-            assert_eq!(manager.frame_top_bar_density(), FrameDensity::Custom(7));
-            assert_eq!(manager.frame_top_bar_density_custom_px(), 7);
-            assert_eq!(manager.browser_density(), BrowserDensity::Custom(11));
-            assert_eq!(manager.browser_density_custom_px(), 11);
-
-            // Switching to a preset keeps the last valid Custom value in storage…
-            manager.set_browser_density(BrowserDensity::Airy);
-            assert_eq!(manager.browser_density(), BrowserDensity::Airy);
-            assert_eq!(manager.browser_density_custom_px(), 11);
-            manager.set_frame_top_bar_density(FrameDensity::Compact);
-            assert_eq!(manager.frame_top_bar_density(), FrameDensity::Compact);
-            assert_eq!(manager.frame_top_bar_density_custom_px(), 7);
-            manager.set_frame_side_bar_density(FrameDensity::Airy);
-            assert_eq!(manager.frame_side_bar_density(), FrameDensity::Airy);
-            assert_eq!(manager.frame_side_bar_density_custom_px(), 5);
-
-            // …and switching back to Custom (without specifying a new value) restores it.
-            manager
-                .set_browser_density(BrowserDensity::custom(manager.browser_density_custom_px()));
-            assert_eq!(manager.browser_density(), BrowserDensity::Custom(11));
-            manager.set_frame_top_bar_density(FrameDensity::custom(
-                manager.frame_top_bar_density_custom_px(),
-            ));
-            assert_eq!(manager.frame_top_bar_density(), FrameDensity::Custom(7));
-            manager.set_frame_side_bar_density(FrameDensity::custom(
-                manager.frame_side_bar_density_custom_px(),
-            ));
-            assert_eq!(manager.frame_side_bar_density(), FrameDensity::Custom(5));
-
-            // Out-of-range input is clamped rather than silently ignored or panicking.
-            manager.set_browser_density(BrowserDensity::Custom(200));
-            assert_eq!(manager.browser_density(), BrowserDensity::Custom(16));
-            assert_eq!(manager.browser_density_custom_px(), 16);
-            manager.set_frame_top_bar_density(FrameDensity::Custom(200));
-            assert_eq!(manager.frame_top_bar_density(), FrameDensity::Custom(12));
-            assert_eq!(manager.frame_top_bar_density_custom_px(), 12);
-            manager.set_frame_side_bar_density(FrameDensity::Custom(200));
-            assert_eq!(manager.frame_side_bar_density(), FrameDensity::Custom(12));
-            assert_eq!(manager.frame_side_bar_density_custom_px(), 12);
+            manager.set_frame_density(FrameDensity::Custom(200));
+            assert_eq!(manager.frame_density(), FrameDensity::Custom(12));
         },
     );
 }

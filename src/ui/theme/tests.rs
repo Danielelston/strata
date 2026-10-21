@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 
 mod density;
-mod frame_density;
 mod syntax;
 mod text_size;
 

@@ -478,98 +478,40 @@ and Icons. See
 
 ## Content and Frame density
 
-The Appearance menu's DENSITY section exposes three independently adjustable
-areas, each its own accordion row: **Content** (labeled "Browser/Content
-Density" in earlier revisions of this doc), and under a separate FRAME
-heading, **Top Bar** and **Side Bar**. Top Bar and Side Bar used to be a single
-combined "Frame Density" row/value; they were split so the header/tab-strip/
-toolbar chrome and the sidebar rows can be tuned separately.
+The Appearance menu's DENSITY section has two sliders. Each one stores a logical px
+value, with tick marks at its Compact and Airy values. The clickable labels under the
+ticks snap to those presets. Any other value counts as Custom. A slider position
+updates live in every window and is saved immediately; the menu stays open.
 
-`browser_density` (`"compact"` | `"airy"` | `"custom"`, default `"compact"`) and
-`browser_density_custom_px` (0–16, default 4) together select `BrowserDensity`
-(`browser_modes.rs`) for the Content row. `frame_top_bar_density`/
-`frame_top_bar_density_custom_px` and `frame_side_bar_density`/
-`frame_side_bar_density_custom_px` (0–12, default 4 each) independently select
-a `FrameDensity` (the same type, reused for both areas) for the Top Bar and
-Side Bar rows respectively. Each area's `*_custom_px` field always holds that
-area's last valid Custom value, independent of which mode is currently active,
-so switching Compact/Airy → Custom restores it and switching away does not
-erase it. `PreferenceManager::set_browser_density`/`set_frame_top_bar_density`/
-`set_frame_side_bar_density` clamp an incoming `Custom(px)` into range before
-storing it.
+| Slider  | Preferences                                     | Range | Compact | Airy | Type             |
+|---------|-------------------------------------------------|-------|---------|------|------------------|
+| Content | `browser_density`, `browser_density_custom_px`  | 0–16  | 4       | 8    | `BrowserDensity` |
+| Frame   | `frame_density`, `frame_density_custom_px`      | 0–12  | 0       | 4    | `FrameDensity`   |
 
-Browser/Content Compact and Airy are unchanged: `BrowserView::set_density` and
-`ModeViews::set_density` toggle a `density-compact`/`density-airy` CSS class on
-the browser overlay and the Icons/List mode roots, matching the preexisting
-`style.css` rules, and `density_icons_columns` fixes Icons' max grid columns at
-20/16. Custom instead sets a `density-custom` class and `ThemeManager` loads a
-small generated stylesheet (`browser_modes::browser_density_custom_css`, applied
-through a dedicated `CssProvider` on the default `Display`, so it is live across
-every open window exactly like the token/text-size providers) with only vertical
-`margin-top`/`margin-bottom`/`padding-top`/`padding-bottom` rules, scaled from
-the one stored px value:
+`*_density` is `"compact"`, `"airy"`, or `"custom"`; `*_custom_px` is read only for
+`"custom"`. Old settings files that have only `browser_density` keep loading. Both
+types implement `browser_modes::DensityScale`, whose `from_px` maps a snap-point
+value to its preset. As a result, a slider resting on 4 px is saved as Compact rather
+than as Custom.
 
-- `.density-custom .file-row > *` and `.mode-list.density-custom .list-row > *`:
-  `margin-top`/`margin-bottom` = the stored px (Columns and List row spacing).
-- `.density-custom .file-row > .file-row-content`: half that, mirroring the
-  existing Airy correction that keeps the inner content wrapper from
-  double-spacing.
-- `.mode-icons.density-custom .file-icons` and `...​.icons-card`: `padding-top`/
-  `padding-bottom` = `round(px * 5/8)`.
-- `.mode-icons.density-custom .file-icons > child`: `margin-top`/`margin-bottom`
-  = `round(px * 3/8)`.
+**Content** is the vertical margin of Columns and List rows. Compact and Airy keep the
+static `density-compact`/`density-airy` rules in `style.css` and their 20/16 Icons
+column caps. A Custom value sets `density-custom`.
+`browser_modes::browser_density_custom_css` then extrapolates every preset property
+linearly through those two rules, so the slider never jumps at a preset. Those
+properties are row margins and minimum heights, plus the Icons grid padding, cell
+margins, and card padding.
 
-Icons' max grid columns in Custom is always 20, never inherited from whichever
-preset was active before. No rule above sets `margin-left`/`right`,
-`padding-left`/`right`, a `min-height`, an icon/image size, or a font-size, so
-horizontal spacing and text size are never touched and a row's final height is
-whatever GTK computes from content plus the above margins, not a stored literal
-height. Re-saving the same Custom value reloads the same generated stylesheet
-rather than stacking additional rules, so repeated identical settings never
-accumulate padding.
+**Frame** is one extra vertical inset applied in lock step to the browser header,
+tab strip, Icons/List pane header, Miller column headers, preview header, and
+sidebar rows, so their heights stay aligned. Miller headers keep the two extra
+bottom pixels that balance their top indicator. The same value spaces out the icon
+buttons in those bars through `margin-left`. At 0 px, which is Compact, no rule is
+emitted.
 
-Frame density fields are present and defaulted (serde-backward-compatible: an
-old settings file with only `browser_density` keeps loading unchanged, and a
-file written by this code still loads on a rollback since the new fields are
-ignorable). `FrameDensity::inset_px` resolves Compact/Airy/Custom to a
-logical-px value (0, 4, or the stored Custom px) independently for each area;
-`ThemeManager` folds both values into the same text-size-driven stylesheet
-pass as `tokens_css`'s `sizing` block (`frame_density_css(top_bar_inset,
-side_bar_inset)`, loaded through the existing `provider`/
-`TOKEN_STYLE_PRIORITY`), rather than a second independent `CssProvider`, so
-the two can never load through conflicting providers. It emits only
-`padding-top`/`padding-bottom` — never `min-height`, `margin-left/right`, or
-`padding-left/right` — on selector groups scoped to browser/chooser chrome
-only, never Settings or a dialog, split by area:
-
-Top Bar (`top_bar_inset`):
-
-- `headerbar.browser-header`, `headerbar.browser-header > windowhandle > box`,
-  `.tab-strip`, `.mode-pane-header` (header + tab strip).
-- `.directory-column .column-header` (Miller column headers, the per-column
-  toolbar/navigation controls).
-- `.preview-header` (preview header/controls; `.preview-header-action` lives
-  inside it, so no separate rule is needed for the vertical inset).
-- Additionally, a second rule sets `margin-left` (not `padding-left`, so it
-  never defeats `sizing`'s fixed button widths) to `top_bar_inset` on each icon
-  button inside Top Bar — `.sidebar-toggle`, `button.header-action`,
-  `menubutton.header-action > button`, `button.column-header-action`,
-  `menubutton.column-header-action > button`, `.list-navigation-button`, and
-  `.preview-header-action` — so the horizontal gap between consecutive icons
-  grows and shrinks with the same value as the bar's vertical inset.
-
-Side Bar (`side_bar_inset`):
-
-- `.sidebar-row` (sidebar rows).
-
-Compact (and Custom(0), which renders identically to Compact) emit nothing for
-that area, matching today's chrome exactly; re-saving the same value reloads
-the same generated text rather than stacking rules, so repeated identical
-settings never accumulate padding, and the two areas never interfere with
-each other's rules. `AppearancePreferences` tracks `frame_top_bar_density` and
-`frame_side_bar_density` so a live change in any window reapplies the shared
-`provider` for every open window, the same mechanism theme/text-size changes
-already use.
+`ThemeManager::apply_density` loads both generated stylesheets into one provider
+above the static stylesheet. It reloads only when either density changes, so
+dragging a slider never reapplies the theme.
 
 ## Adding a preference
 

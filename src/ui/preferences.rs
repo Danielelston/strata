@@ -22,6 +22,7 @@ use crate::{
     },
 };
 
+use super::browser_modes::DensityScale;
 use super::icons_cell::{MAX_ICONS_THUMBNAIL_SIZE, MIN_ICONS_THUMBNAIL_SIZE};
 
 pub(in crate::ui) const SEND_TO_RECENT_DESTINATIONS_LIMIT: usize = 3;
@@ -127,13 +128,9 @@ pub(in crate::ui) struct Preferences {
     #[serde(default = "default_density_custom_px")]
     browser_density_custom_px: u8,
     #[serde(default = "default_frame_density")]
-    frame_top_bar_density: String,
+    frame_density: String,
     #[serde(default = "default_density_custom_px")]
-    frame_top_bar_density_custom_px: u8,
-    #[serde(default = "default_frame_density")]
-    frame_side_bar_density: String,
-    #[serde(default = "default_density_custom_px")]
-    frame_side_bar_density_custom_px: u8,
+    frame_density_custom_px: u8,
     #[serde(default)]
     group_by_type: bool,
     #[serde(default = "default_file_clicks", rename = "list_file_clicks")]
@@ -387,10 +384,8 @@ impl Default for Preferences {
             browser_mode: default_browser_mode(),
             browser_density: default_browser_density(),
             browser_density_custom_px: default_density_custom_px(),
-            frame_top_bar_density: default_frame_density(),
-            frame_top_bar_density_custom_px: default_density_custom_px(),
-            frame_side_bar_density: default_frame_density(),
-            frame_side_bar_density_custom_px: default_density_custom_px(),
+            frame_density: default_frame_density(),
+            frame_density_custom_px: default_density_custom_px(),
             group_by_type: false,
             columns_file_clicks: default_file_clicks(),
             columns_folder_clicks: default_folder_clicks(),
@@ -490,9 +485,30 @@ fn default_frame_density() -> String {
     "compact".to_owned()
 }
 
-/// Shared first-ever Custom value for both density areas (see the locked spec).
+/// Only read when the matching density is `"custom"`.
 fn default_density_custom_px() -> u8 {
-    4
+    0
+}
+
+fn stored_density<D: DensityScale>(mode: &str, custom_px: u8) -> D {
+    match mode {
+        "airy" => D::from_px(D::AIRY_PX),
+        "custom" => D::from_px(custom_px),
+        _ => D::from_px(D::COMPACT_PX),
+    }
+}
+
+fn store_density<D: DensityScale>(density: D, mode: &mut String, custom_px: &mut u8) {
+    let px = density.px();
+    *mode = if px == D::COMPACT_PX {
+        "compact"
+    } else if px == D::AIRY_PX {
+        "airy"
+    } else {
+        *custom_px = px;
+        "custom"
+    }
+    .to_owned();
 }
 
 fn default_file_clicks() -> u8 {
@@ -1473,106 +1489,44 @@ impl PreferenceManager {
 
     pub fn browser_density(&self) -> super::browser_modes::BrowserDensity {
         let preferences = self.preferences.borrow();
-        match preferences.browser_density.as_str() {
-            "airy" => super::browser_modes::BrowserDensity::Airy,
-            "custom" => {
-                super::browser_modes::BrowserDensity::custom(preferences.browser_density_custom_px)
-            }
-            _ => super::browser_modes::BrowserDensity::Compact,
-        }
+        stored_density(
+            &preferences.browser_density,
+            preferences.browser_density_custom_px,
+        )
     }
 
     pub fn set_browser_density(&self, density: super::browser_modes::BrowserDensity) {
-        let mut preferences = self.preferences.borrow_mut();
-        preferences.browser_density = match density {
-            super::browser_modes::BrowserDensity::Compact => "compact",
-            super::browser_modes::BrowserDensity::Airy => "airy",
-            super::browser_modes::BrowserDensity::Custom(px) => {
-                preferences.browser_density_custom_px =
-                    px.clamp(0, super::browser_modes::BrowserDensity::CUSTOM_MAX);
-                "custom"
-            }
+        {
+            let mut preferences = self.preferences.borrow_mut();
+            let preferences = &mut *preferences;
+            store_density(
+                density,
+                &mut preferences.browser_density,
+                &mut preferences.browser_density_custom_px,
+            );
         }
-        .to_owned();
-        drop(preferences);
         self.save_preferences();
     }
 
-    /// The Browser/Content area's last valid Custom value (0..=16, default 4),
-    /// independent of whether Custom is the currently active mode. Used to
-    /// populate the Appearance menu's numeric control.
-    pub fn browser_density_custom_px(&self) -> u8 {
-        self.preferences.borrow().browser_density_custom_px
-    }
-
-    pub fn frame_top_bar_density(&self) -> super::browser_modes::FrameDensity {
+    pub fn frame_density(&self) -> super::browser_modes::FrameDensity {
         let preferences = self.preferences.borrow();
-        match preferences.frame_top_bar_density.as_str() {
-            "airy" => super::browser_modes::FrameDensity::Airy,
-            "custom" => super::browser_modes::FrameDensity::custom(
-                preferences.frame_top_bar_density_custom_px,
-            ),
-            _ => super::browser_modes::FrameDensity::Compact,
-        }
+        stored_density(
+            &preferences.frame_density,
+            preferences.frame_density_custom_px,
+        )
     }
 
-    pub fn set_frame_top_bar_density(&self, density: super::browser_modes::FrameDensity) {
-        let mut preferences = self.preferences.borrow_mut();
-        preferences.frame_top_bar_density = match density {
-            super::browser_modes::FrameDensity::Compact => "compact",
-            super::browser_modes::FrameDensity::Airy => "airy",
-            super::browser_modes::FrameDensity::Custom(px) => {
-                preferences.frame_top_bar_density_custom_px =
-                    px.clamp(0, super::browser_modes::FrameDensity::CUSTOM_MAX);
-                "custom"
-            }
+    pub fn set_frame_density(&self, density: super::browser_modes::FrameDensity) {
+        {
+            let mut preferences = self.preferences.borrow_mut();
+            let preferences = &mut *preferences;
+            store_density(
+                density,
+                &mut preferences.frame_density,
+                &mut preferences.frame_density_custom_px,
+            );
         }
-        .to_owned();
-        drop(preferences);
         self.save_preferences();
-    }
-
-    /// The Top Bar area's last valid Custom value (0..=12, default 4),
-    /// independent of whether Custom is the currently active mode and of the
-    /// Side Bar area's own value. Used to populate the Appearance menu's
-    /// numeric control.
-    pub fn frame_top_bar_density_custom_px(&self) -> u8 {
-        self.preferences.borrow().frame_top_bar_density_custom_px
-    }
-
-    pub fn frame_side_bar_density(&self) -> super::browser_modes::FrameDensity {
-        let preferences = self.preferences.borrow();
-        match preferences.frame_side_bar_density.as_str() {
-            "airy" => super::browser_modes::FrameDensity::Airy,
-            "custom" => super::browser_modes::FrameDensity::custom(
-                preferences.frame_side_bar_density_custom_px,
-            ),
-            _ => super::browser_modes::FrameDensity::Compact,
-        }
-    }
-
-    pub fn set_frame_side_bar_density(&self, density: super::browser_modes::FrameDensity) {
-        let mut preferences = self.preferences.borrow_mut();
-        preferences.frame_side_bar_density = match density {
-            super::browser_modes::FrameDensity::Compact => "compact",
-            super::browser_modes::FrameDensity::Airy => "airy",
-            super::browser_modes::FrameDensity::Custom(px) => {
-                preferences.frame_side_bar_density_custom_px =
-                    px.clamp(0, super::browser_modes::FrameDensity::CUSTOM_MAX);
-                "custom"
-            }
-        }
-        .to_owned();
-        drop(preferences);
-        self.save_preferences();
-    }
-
-    /// The Side Bar area's last valid Custom value (0..=12, default 4),
-    /// independent of whether Custom is the currently active mode and of the
-    /// Top Bar area's own value. Used to populate the Appearance menu's
-    /// numeric control.
-    pub fn frame_side_bar_density_custom_px(&self) -> u8 {
-        self.preferences.borrow().frame_side_bar_density_custom_px
     }
 
     pub fn language(&self) -> crate::i18n::Language {

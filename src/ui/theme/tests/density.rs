@@ -2,44 +2,51 @@
 
 use crate::{
     test_support::gtk_test,
-    ui::{browser_modes::BrowserDensity, preferences::PreferenceManager, theme::ThemeManager},
+    ui::{
+        browser_modes::{BrowserDensity, DensityScale, FrameDensity},
+        preferences::PreferenceManager,
+        theme::ThemeManager,
+    },
 };
 
 #[test]
-fn browser_custom_density_css_loads_updates_and_clears_live() {
+fn density_sliders_restyle_live_and_clear_at_their_presets() {
     gtk_test(
-        "ui::theme::tests::density::browser_custom_density_css_loads_updates_and_clears_live",
+        "ui::theme::tests::density::density_sliders_restyle_live_and_clear_at_their_presets",
         || {
             let themes = ThemeManager::shared();
             let manager = PreferenceManager::shared();
-
-            // Compact/Airy rely entirely on the static stylesheet: no generated rules.
             assert_eq!(manager.browser_density(), BrowserDensity::Compact);
+            assert_eq!(manager.frame_density(), FrameDensity::Compact);
             assert_eq!(themes.density_stylesheet(), "");
 
-            // GTK's CssProvider re-serializes rules (alphabetical selectors/properties),
-            // so assert on the values present rather than the exact source text.
-            manager.set_browser_density(BrowserDensity::Custom(9));
+            manager.set_browser_density(BrowserDensity::from_px(9));
             let css = themes.density_stylesheet();
-            assert!(css.contains("margin-top: 9px"));
-            assert!(css.contains("margin-bottom: 9px"));
             assert!(css.contains(".density-custom"));
-            assert!(css.contains(".file-row"));
+            assert!(css.contains("margin-top: 9px"));
 
-            // A different value replaces the generated rules rather than stacking them.
-            manager.set_browser_density(BrowserDensity::Custom(3));
+            manager.set_frame_density(FrameDensity::from_px(5));
             let css = themes.density_stylesheet();
-            assert!(css.contains("margin-top: 3px"));
-            assert!(!css.contains("margin-top: 9px"));
+            assert!(css.contains("margin-top: 9px"), "content keeps its value");
+            for bar in [
+                "headerbar.browser-header",
+                ".directory-column .column-header",
+                ".preview-header",
+                ".sidebar-row",
+            ] {
+                assert!(css.contains(bar), "frame inset reaches {bar}");
+            }
+            assert!(css.contains("padding-top: 5px"));
 
-            // Re-applying the same value does not accumulate padding: the generated
-            // stylesheet stays exactly the same text.
-            let before = themes.density_stylesheet();
-            manager.set_browser_density(BrowserDensity::Custom(3));
-            assert_eq!(themes.density_stylesheet(), before);
+            manager.set_browser_density(BrowserDensity::from_px(8));
+            let css = themes.density_stylesheet();
+            assert!(
+                !css.contains(".density-custom"),
+                "Airy uses the static rules"
+            );
+            assert!(css.contains("padding-top: 5px"), "frame keeps its value");
 
-            // Switching back to a preset clears the generated provider.
-            manager.set_browser_density(BrowserDensity::Airy);
+            manager.set_frame_density(FrameDensity::from_px(0));
             assert_eq!(themes.density_stylesheet(), "");
         },
     );

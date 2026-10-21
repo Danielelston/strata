@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-//! Behavioral regressions for the Appearance menu's Content, Frame Top Bar, and Frame
-//! Side Bar density accordion rows (Units 3 and the Frame area split): expand/collapse,
-//! independent row state, and that no interaction ever closes the Appearance menu. No
-//! layout/geometry assertions.
+//! Appearance menu density sliders: each changes only its own area, snap labels select
+//! their preset, and no interaction closes the menu.
 
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -13,7 +11,7 @@ use crate::services::{
     LoadHandle, Preview, PreviewContent, PreviewEvent, PreviewProvider, PreviewRequest,
 };
 use crate::test_support::gtk_test;
-use crate::ui::browser_modes::{BrowserDensity, FrameDensity};
+use crate::ui::browser_modes::{BrowserDensity, DensityScale, FrameDensity};
 use crate::ui::preview::PreviewDrawer;
 
 struct NoPreview;
@@ -57,59 +55,31 @@ fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
     widgets
 }
 
-fn shows_label(widget: &gtk::Widget, text: &str) -> bool {
-    descendants(widget).into_iter().any(|widget| {
-        widget
-            .downcast_ref::<gtk::Label>()
-            .is_some_and(|label| label.text() == text)
-    })
-}
-
-/// The three accordion toggles, in menu order: Content, then Frame's Top Bar, then
-/// Frame's Side Bar.
-fn density_toggles(popover: &gtk::Popover) -> Vec<gtk::Widget> {
-    descendants(popover.upcast_ref())
+fn density_scales(popover: &gtk::Popover) -> [gtk::Scale; 2] {
+    let scales: Vec<gtk::Scale> = descendants(popover.upcast_ref())
         .into_iter()
-        .filter(|widget| widget.has_css_class("appearance-density-toggle"))
-        .collect()
-}
-
-/// The (decrease, increase) buttons of the nth density row's custom stepper, in menu
-/// order: Content=0, Top Bar=1, Side Bar=2. The stepper mirrors Text Size's
-/// `[decrease][value][increase]` control (see `controls::stepper`), not a native
-/// `GtkSpinButton`.
-fn density_stepper(popover: &gtk::Popover, index: usize) -> (gtk::Button, gtk::Button) {
-    let stepper_box = descendants(popover.upcast_ref())
-        .into_iter()
-        .filter_map(|widget| widget.downcast::<gtk::Box>().ok())
-        .filter(|widget| widget.has_css_class("appearance-density-custom-stepper"))
-        .nth(index)
-        .expect("density custom stepper");
-    let buttons: Vec<gtk::Button> = descendants(stepper_box.upcast_ref())
-        .into_iter()
-        .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .filter_map(|widget| widget.downcast::<gtk::Scale>().ok())
+        .filter(|scale| scale.has_css_class("appearance-density-scale"))
         .collect();
-    assert_eq!(
-        buttons.len(),
-        3,
-        "expected decrease/value/increase buttons in the stepper"
-    );
-    (buttons[0].clone(), buttons[2].clone())
+    scales.try_into().expect("Content and Frame sliders")
 }
 
-fn click_n_times(button: &gtk::Button, times: u32) {
-    for _ in 0..times {
-        button.emit_clicked();
-    }
-}
-
-fn density_option(popover: &gtk::Popover, label: &str) -> gtk::Button {
-    descendants(popover.upcast_ref())
+fn snap_label(scale: &gtk::Scale, label: &str) -> gtk::Button {
+    descendants(&scale.next_sibling().expect("snap labels"))
         .into_iter()
         .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
-        .filter(|widget| widget.has_css_class("appearance-option"))
-        .find(|widget| shows_label(widget.upcast_ref(), label))
-        .unwrap_or_else(|| panic!("no {label} option in the Appearance menu"))
+        .find(|button| button.label().as_deref() == Some(label))
+        .unwrap_or_else(|| panic!("no {label} snap label"))
+}
+
+fn value_text(scale: &gtk::Scale) -> String {
+    scale
+        .prev_sibling()
+        .and_then(|heading| heading.last_child())
+        .and_downcast::<gtk::Label>()
+        .expect("density value label")
+        .text()
+        .into()
 }
 
 fn open_appearance_menu(preferences: Rc<PreferenceManager>) -> (gtk::Window, gtk::Popover) {
@@ -128,76 +98,27 @@ fn open_appearance_menu(preferences: Rc<PreferenceManager>) -> (gtk::Window, gtk
 }
 
 #[test]
-fn all_three_density_rows_expand_independently_without_a_nested_popover() {
+fn dragging_a_density_slider_changes_only_its_area_and_keeps_the_menu_open() {
     gtk_test(
-        "ui::window::tests::appearance_density::all_three_density_rows_expand_independently_without_a_nested_popover",
+        "ui::window::tests::appearance_density::dragging_a_density_slider_changes_only_its_area_and_keeps_the_menu_open",
         || {
             PreferenceManager::seed_saved_preferences_for_test();
             let preferences = PreferenceManager::shared();
-            let (window, popover) = open_appearance_menu(preferences);
-            let toggles = density_toggles(&popover);
-            assert_eq!(toggles.len(), 3, "Content, Top Bar, and Side Bar rows");
-            let revealer_of = |toggle: &gtk::Widget| -> gtk::Revealer {
-                toggle
-                    .next_sibling()
-                    .and_downcast::<gtk::Revealer>()
-                    .expect("accordion revealer")
-            };
-            let content_revealer = revealer_of(&toggles[0]);
-            let top_bar_revealer = revealer_of(&toggles[1]);
-            let side_bar_revealer = revealer_of(&toggles[2]);
-            assert!(!content_revealer.reveals_child());
-            assert!(!top_bar_revealer.reveals_child());
-            assert!(!side_bar_revealer.reveals_child());
+            preferences.set_browser_density(BrowserDensity::Compact);
+            preferences.set_frame_density(FrameDensity::Compact);
+            let (window, popover) = open_appearance_menu(preferences.clone());
+            let [content, frame] = density_scales(&popover);
 
-            let click = |widget: &gtk::Widget| {
-                widget
-                    .downcast_ref::<gtk::Button>()
-                    .expect("toggle")
-                    .emit_clicked();
-            };
+            content.set_value(6.0);
+            assert_eq!(preferences.browser_density(), BrowserDensity::Custom(6));
+            assert_eq!(preferences.frame_density(), FrameDensity::Compact);
+            assert_eq!(value_text(&content), "Custom · 6 px");
 
-            click(&toggles[0]);
-            assert!(content_revealer.reveals_child(), "Content row expands");
-            assert!(
-                !top_bar_revealer.reveals_child() && !side_bar_revealer.reveals_child(),
-                "expanding Content must not expand Top Bar or Side Bar"
-            );
-            assert!(popover.is_visible(), "expanding never closes the menu");
-
-            click(&toggles[1]);
-            assert!(
-                content_revealer.reveals_child(),
-                "Content row stays expanded"
-            );
-            assert!(top_bar_revealer.reveals_child(), "Top Bar row also expands");
-            assert!(
-                !side_bar_revealer.reveals_child(),
-                "expanding Top Bar must not expand Side Bar"
-            );
-            assert!(
-                popover.is_visible(),
-                "two rows expanded keeps the menu open"
-            );
-
-            click(&toggles[2]);
-            assert!(content_revealer.reveals_child());
-            assert!(top_bar_revealer.reveals_child());
-            assert!(
-                side_bar_revealer.reveals_child(),
-                "Side Bar row also expands"
-            );
-            assert!(
-                popover.is_visible(),
-                "all three rows expanded keeps the menu open"
-            );
-
-            click(&toggles[0]);
-            assert!(!content_revealer.reveals_child(), "Content row collapses");
-            assert!(
-                top_bar_revealer.reveals_child() && side_bar_revealer.reveals_child(),
-                "collapsing Content must not collapse Top Bar or Side Bar"
-            );
+            frame.set_value(f64::from(FrameDensity::AIRY_PX));
+            assert_eq!(preferences.frame_density(), FrameDensity::Airy);
+            assert_eq!(preferences.browser_density(), BrowserDensity::Custom(6));
+            assert_eq!(value_text(&frame), "Airy · 4 px");
+            assert!(popover.is_visible(), "sliding never closes the menu");
 
             window.destroy();
         },
@@ -205,104 +126,30 @@ fn all_three_density_rows_expand_independently_without_a_nested_popover() {
 }
 
 #[test]
-fn selecting_a_density_option_leaves_the_menu_open_and_only_changes_its_own_row() {
+fn snap_labels_select_their_preset_and_follow_changes_from_other_windows() {
     gtk_test(
-        "ui::window::tests::appearance_density::selecting_a_density_option_leaves_the_menu_open_and_only_changes_its_own_row",
+        "ui::window::tests::appearance_density::snap_labels_select_their_preset_and_follow_changes_from_other_windows",
         || {
             PreferenceManager::seed_saved_preferences_for_test();
             let preferences = PreferenceManager::shared();
-            preferences.set_browser_density(BrowserDensity::Compact);
-            preferences.set_frame_top_bar_density(FrameDensity::Compact);
-            preferences.set_frame_side_bar_density(FrameDensity::Compact);
+            preferences.set_browser_density(BrowserDensity::from_px(11));
             let (window, popover) = open_appearance_menu(preferences.clone());
+            let [content, _] = density_scales(&popover);
+            let compact = snap_label(&content, "Compact");
+            let airy = snap_label(&content, "Airy");
+            assert_eq!(content.value(), 11.0);
+            assert!(!compact.has_css_class("selected") && !airy.has_css_class("selected"));
 
-            // The first "Airy" option in menu order belongs to the Content row.
-            density_option(&popover, "Airy").emit_clicked();
-            assert!(
-                popover.is_visible(),
-                "choosing Airy must not close the Appearance menu"
-            );
+            airy.emit_clicked();
             assert_eq!(preferences.browser_density(), BrowserDensity::Airy);
-            assert_eq!(
-                preferences.frame_top_bar_density(),
-                FrameDensity::Compact,
-                "Content changes must not touch Top Bar"
-            );
-            assert_eq!(
-                preferences.frame_side_bar_density(),
-                FrameDensity::Compact,
-                "Content changes must not touch Side Bar"
-            );
+            assert_eq!(content.value(), f64::from(BrowserDensity::AIRY_PX));
+            assert!(airy.has_css_class("selected"));
+            assert!(popover.is_visible(), "snapping never closes the menu");
 
-            window.destroy();
-        },
-    );
-}
-
-#[test]
-fn editing_a_custom_stepper_selects_custom_and_keeps_the_menu_open_without_touching_other_rows() {
-    gtk_test(
-        "ui::window::tests::appearance_density::editing_a_custom_stepper_selects_custom_and_keeps_the_menu_open_without_touching_other_rows",
-        || {
-            // Seeded fixture custom px: Content 11, Top Bar 9, Side Bar 6.
-            PreferenceManager::seed_saved_preferences_for_test();
-            let preferences = PreferenceManager::shared();
             preferences.set_browser_density(BrowserDensity::Compact);
-            preferences.set_frame_top_bar_density(FrameDensity::Compact);
-            preferences.set_frame_side_bar_density(FrameDensity::Compact);
-            let (window, popover) = open_appearance_menu(preferences.clone());
-
-            let (content_decrease, _) = density_stepper(&popover, 0);
-            click_n_times(&content_decrease, 4);
-            assert!(
-                popover.is_visible(),
-                "editing a custom stepper must not close the Appearance menu"
-            );
-            assert_eq!(preferences.browser_density(), BrowserDensity::custom(7));
-            assert_eq!(
-                preferences.frame_top_bar_density(),
-                FrameDensity::Compact,
-                "editing Content's stepper must not touch Top Bar"
-            );
-            assert_eq!(
-                preferences.frame_side_bar_density(),
-                FrameDensity::Compact,
-                "editing Content's stepper must not touch Side Bar"
-            );
-
-            let (_, top_bar_increase) = density_stepper(&popover, 1);
-            click_n_times(&top_bar_increase, 3);
-            assert_eq!(
-                preferences.frame_top_bar_density(),
-                FrameDensity::custom(12)
-            );
-            assert_eq!(
-                preferences.browser_density(),
-                BrowserDensity::custom(7),
-                "editing Top Bar's stepper must not touch Content"
-            );
-            assert_eq!(
-                preferences.frame_side_bar_density(),
-                FrameDensity::Compact,
-                "editing Top Bar's stepper must not touch Side Bar"
-            );
-
-            let (side_bar_decrease, _) = density_stepper(&popover, 2);
-            click_n_times(&side_bar_decrease, 3);
-            assert_eq!(
-                preferences.frame_side_bar_density(),
-                FrameDensity::custom(3)
-            );
-            assert_eq!(
-                preferences.browser_density(),
-                BrowserDensity::custom(7),
-                "editing Side Bar's stepper must not touch Content"
-            );
-            assert_eq!(
-                preferences.frame_top_bar_density(),
-                FrameDensity::custom(12),
-                "editing Side Bar's stepper must not touch Top Bar"
-            );
+            assert_eq!(content.value(), f64::from(BrowserDensity::COMPACT_PX));
+            assert!(compact.has_css_class("selected") && !airy.has_css_class("selected"));
+            assert_eq!(value_text(&content), "Compact · 4 px");
 
             window.destroy();
         },

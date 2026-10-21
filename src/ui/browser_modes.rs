@@ -123,124 +123,62 @@ impl BrowserMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum BrowserDensity {
-    #[default]
-    Compact,
-    Airy,
-    /// Vertical inset/spacing in logical px (see `docs/preferences.md`), clamped
-    /// 0..=16. Never a literal row/header height.
-    Custom(u8),
+/// One position on a density slider: a px value, where `COMPACT_PX` and `AIRY_PX`
+/// are the snap points and every other value in `0..=MAX_PX` is Custom.
+pub(super) trait DensityScale: Copy + PartialEq + 'static {
+    const COMPACT_PX: u8;
+    const AIRY_PX: u8;
+    const MAX_PX: u8;
+    fn from_px(px: u8) -> Self;
+    fn px(self) -> u8;
 }
 
-impl BrowserDensity {
-    pub const CUSTOM_MIN: u8 = 0;
-    pub const CUSTOM_MAX: u8 = 16;
-
-    /// Clamps `px` into the valid Browser/Content Custom range.
-    pub fn custom(px: u8) -> Self {
-        Self::Custom(px.clamp(Self::CUSTOM_MIN, Self::CUSTOM_MAX))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum FrameDensity {
-    #[default]
-    Compact,
-    Airy,
-    /// Vertical inset/spacing in logical px (see `docs/preferences.md`), clamped
-    /// 0..=12.
-    Custom(u8),
-}
-
-impl FrameDensity {
-    pub const CUSTOM_MIN: u8 = 0;
-    pub const CUSTOM_MAX: u8 = 12;
-
-    /// Clamps `px` into the valid Frame Custom range.
-    pub fn custom(px: u8) -> Self {
-        Self::Custom(px.clamp(Self::CUSTOM_MIN, Self::CUSTOM_MAX))
-    }
-
-    /// The vertical inset/spacing in logical px this value applies to the
-    /// covered frame areas (see `docs/preferences.md`): 0 for Compact, 4 for
-    /// Airy, or the stored Custom value.
-    pub fn inset_px(self) -> u8 {
-        match self {
-            Self::Compact => 0,
-            Self::Airy => 4,
-            Self::Custom(px) => px,
+macro_rules! density_scale {
+    ($(#[$meta:meta])* $name:ident { compact: $compact:literal, airy: $airy:literal, max: $max:literal }) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+        pub enum $name {
+            #[default]
+            Compact,
+            Airy,
+            /// `from_px` maps snap-point values to their preset rather than to Custom.
+            Custom(u8),
         }
-    }
-}
 
-/// Shared shape of `BrowserDensity` and `FrameDensity` for the Appearance menu's
-/// accordion rows (Unit 3): both model Compact/Airy/Custom(px), but stay separate
-/// types because their Custom ranges and serialized strings differ.
-pub(super) trait DensityValue: Copy + Eq + 'static {
-    fn compact() -> Self;
-    fn airy() -> Self;
-    fn custom(px: u8) -> Self;
-    /// `(min, max)` inclusive bounds for the Custom value.
-    fn custom_bounds() -> (u8, u8);
-    fn is_compact(self) -> bool;
-    fn is_airy(self) -> bool;
-    fn custom_px(self) -> Option<u8>;
-}
+        impl DensityScale for $name {
+            const COMPACT_PX: u8 = $compact;
+            const AIRY_PX: u8 = $airy;
+            const MAX_PX: u8 = $max;
 
-impl DensityValue for BrowserDensity {
-    fn compact() -> Self {
-        Self::Compact
-    }
-    fn airy() -> Self {
-        Self::Airy
-    }
-    fn custom(px: u8) -> Self {
-        Self::custom(px)
-    }
-    fn custom_bounds() -> (u8, u8) {
-        (Self::CUSTOM_MIN, Self::CUSTOM_MAX)
-    }
-    fn is_compact(self) -> bool {
-        self == Self::Compact
-    }
-    fn is_airy(self) -> bool {
-        self == Self::Airy
-    }
-    fn custom_px(self) -> Option<u8> {
-        match self {
-            Self::Custom(px) => Some(px),
-            _ => None,
+            fn from_px(px: u8) -> Self {
+                match px.min(Self::MAX_PX) {
+                    $compact => Self::Compact,
+                    $airy => Self::Airy,
+                    px => Self::Custom(px),
+                }
+            }
+
+            fn px(self) -> u8 {
+                match self {
+                    Self::Compact => Self::COMPACT_PX,
+                    Self::Airy => Self::AIRY_PX,
+                    Self::Custom(px) => px.min(Self::MAX_PX),
+                }
+            }
         }
-    }
+    };
 }
 
-impl DensityValue for FrameDensity {
-    fn compact() -> Self {
-        Self::Compact
-    }
-    fn airy() -> Self {
-        Self::Airy
-    }
-    fn custom(px: u8) -> Self {
-        Self::custom(px)
-    }
-    fn custom_bounds() -> (u8, u8) {
-        (Self::CUSTOM_MIN, Self::CUSTOM_MAX)
-    }
-    fn is_compact(self) -> bool {
-        self == Self::Compact
-    }
-    fn is_airy(self) -> bool {
-        self == Self::Airy
-    }
-    fn custom_px(self) -> Option<u8> {
-        match self {
-            Self::Custom(px) => Some(px),
-            _ => None,
-        }
-    }
-}
+density_scale!(
+    /// File-row and icon-card vertical spacing in logical px.
+    BrowserDensity { compact: 4, airy: 8, max: 16 }
+);
+
+density_scale!(
+    /// Extra vertical inset shared by the header, tab strip, sidebar rows, and
+    /// Miller/preview headers, so their heights stay in lock step.
+    FrameDensity { compact: 0, airy: 4, max: 12 }
+);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClickCount {
@@ -2525,7 +2463,7 @@ fn append_icons_size_actions(
     scale.connect_value_changed(move |_| sync());
 }
 
-fn disable_scale_long_press_zoom(scale: &gtk::Scale) {
+pub(super) fn disable_scale_long_press_zoom(scale: &gtk::Scale) {
     let controllers = scale.observe_controllers();
     let long_presses: Vec<gtk::GestureLongPress> = (0..controllers.n_items())
         .filter_map(|index| {
@@ -3256,33 +3194,33 @@ fn configure_icons_view_density(icons: &gtk::GridView, density: BrowserDensity) 
 }
 
 fn density_icons_columns(density: BrowserDensity) -> u32 {
-    match density {
-        // Custom's icon-grid max columns is fixed at 20, never inherited from a
-        // previously selected preset.
-        BrowserDensity::Compact | BrowserDensity::Custom(_) => 20,
-        BrowserDensity::Airy => 16,
+    if density.px() < BrowserDensity::AIRY_PX {
+        20
+    } else {
+        16
     }
 }
 
-/// Vertical-only spacing CSS for Browser/Content Custom density (`px`, already
-/// clamped to 0..=16). Covers Columns/List row margins and Icons card/grid
-/// vertical gaps/insets; never touches horizontal spacing, icon/image sizes, or
-/// text size. See `docs/preferences.md` and the selectors `style.css` already
-/// uses for `.density-airy`/`.density-compact`, which this mirrors with a
-/// computed value instead of a fixed preset number.
+/// Spacing for a Custom slider position, extrapolated linearly through the static
+/// Compact and Airy rules in `style.css` so the slider has no jump at either preset.
 pub(crate) fn browser_density_custom_css(px: u8) -> String {
-    let px = f64::from(px);
-    let row_margin = px.round() as i64;
-    let row_content_margin = (px / 2.0).round() as i64;
-    let icons_padding = (px * 5.0 / 8.0).round() as i64;
-    let icons_child_margin = (px * 3.0 / 8.0).round() as i64;
+    let step = (f64::from(px) - f64::from(BrowserDensity::COMPACT_PX))
+        / f64::from(BrowserDensity::AIRY_PX - BrowserDensity::COMPACT_PX);
+    let between = |compact: f64, airy: f64| (compact + (airy - compact) * step).max(0.0).round();
+    let row_margin = px;
+    let row_content_margin = px.min(4);
+    let row_min_height = between(26.0, 42.0);
+    let grid_padding = between(0.0, 5.0);
+    let child_margin = between(1.0, 3.0);
+    let card_vertical = between(2.0, 5.0);
+    let card_horizontal = between(4.0, 7.0);
     format!(
-        ".density-custom .file-row > * {{\n  margin-top: {row_margin}px;\n  margin-bottom: {row_margin}px;\n}}\n\
-         .density-custom .file-row > .file-row-content {{\n  margin-top: {row_content_margin}px;\n  margin-bottom: {row_content_margin}px;\n}}\n\
-         .mode-list.density-custom .list-row > * {{\n  margin-top: {row_margin}px;\n  margin-bottom: {row_margin}px;\n}}\n\
-         .mode-icons.density-custom .file-icons {{\n  padding-top: {icons_padding}px;\n  padding-bottom: {icons_padding}px;\n}}\n\
-         .mode-icons.density-custom .file-icons > child {{\n  margin-top: {icons_child_margin}px;\n  margin-bottom: {icons_child_margin}px;\n}}\n\
-         .mode-icons.density-custom .icons-card {{\n  padding-top: {icons_padding}px;\n  padding-bottom: {icons_padding}px;\n}}\n"
+        ".density-custom .file-row, .mode-list.density-custom .list-row {{ min-height: {row_min_height}px; }}\n\
+         .density-custom .file-row > *, .mode-list.density-custom .list-row > * {{ margin-top: {row_margin}px; margin-bottom: {row_margin}px; }}\n\
+         .density-custom .file-row > .file-row-content {{ margin-top: {row_content_margin}px; margin-bottom: {row_content_margin}px; }}\n\
+         .mode-icons.density-custom .file-icons {{ padding: {grid_padding}px; }}\n\
+         .mode-icons.density-custom .file-icons > child {{ margin: {child_margin}px; }}\n\
+         .mode-icons.density-custom .icons-card {{ padding: {card_vertical}px {card_horizontal}px; }}\n"
     )
 }
 
