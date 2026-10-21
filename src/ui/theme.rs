@@ -30,7 +30,11 @@ const BASE_THEME_STYLE_PRIORITY: u32 = RESET_STYLE_PRIORITY + 1;
 const FONT_STYLE_PRIORITY: u32 = BASE_THEME_STYLE_PRIORITY + 1;
 const STYLE_PRIORITY: u32 = FONT_STYLE_PRIORITY + 1;
 const RESET_CSS: &str = "* { all: unset; }";
-const TOKEN_STYLE_PRIORITY: u32 = STYLE_PRIORITY + 1;
+/// Browser/Content Custom density's generated vertical-spacing rules; above the
+/// static stylesheet (so `.density-custom` wins over `.density-compact`'s
+/// selectors) and below the token/user providers, which density never touches.
+const DENSITY_STYLE_PRIORITY: u32 = STYLE_PRIORITY + 1;
+const TOKEN_STYLE_PRIORITY: u32 = DENSITY_STYLE_PRIORITY + 1;
 /// Above every Strata stylesheet, so `~/.config/strata/style.css` has the final word.
 const USER_STYLE_PRIORITY: u32 = TOKEN_STYLE_PRIORITY + 1;
 const USER_STYLE_FILE: &str = "style.css";
@@ -117,6 +121,8 @@ struct AppearancePreferences {
     interface_font: Option<String>,
     element_glow: bool,
     file_icon_colors: FileIconColors,
+    frame_top_bar_density: super::browser_modes::FrameDensity,
+    frame_side_bar_density: super::browser_modes::FrameDensity,
 }
 
 type ThemeRefreshPreference = dyn Fn(&gtk::Widget, &ThemeManager);
@@ -195,6 +201,7 @@ pub struct ThemeManager {
     base_theme_provider: gtk::CssProvider,
     font_provider: gtk::CssProvider,
     base_provider: gtk::CssProvider,
+    density_provider: gtk::CssProvider,
     user_provider: gtk::CssProvider,
     base_roundness: Cell<Option<CornerRoundness>>,
     themes: RefCell<Vec<Theme>>,
@@ -250,6 +257,8 @@ impl ThemeManager {
             interface_font: preferences.interface_font(),
             element_glow: preferences.element_glow(),
             file_icon_colors: preferences.file_icon_colors(),
+            frame_top_bar_density: preferences.frame_top_bar_density(),
+            frame_side_bar_density: preferences.frame_side_bar_density(),
         };
 
         let manager = Rc::new(Self {
@@ -258,6 +267,7 @@ impl ThemeManager {
             base_theme_provider: gtk::CssProvider::new(),
             font_provider: gtk::CssProvider::new(),
             base_provider: gtk::CssProvider::new(),
+            density_provider: gtk::CssProvider::new(),
             user_provider: gtk::CssProvider::new(),
             base_roundness: Cell::new(None),
             themes: RefCell::new(themes),
@@ -291,6 +301,7 @@ impl ThemeManager {
         pin_base_theme();
         manager.install_provider();
         manager.apply_base_stylesheet();
+        manager.apply_density();
         manager.apply_selected();
         manager.monitor_text_scaling();
         manager.monitor_omarchy(&omarchy.directories);
@@ -488,6 +499,11 @@ impl ThemeManager {
             );
             gtk::style_context_add_provider_for_display(
                 &display,
+                &self.density_provider,
+                DENSITY_STYLE_PRIORITY,
+            );
+            gtk::style_context_add_provider_for_display(
+                &display,
                 &self.provider,
                 TOKEN_STYLE_PRIORITY,
             );
@@ -570,6 +586,32 @@ impl ThemeManager {
         self.base_provider.to_str().into()
     }
 
+    /// Browser/Content Custom's generated vertical-spacing rules (see
+    /// `docs/preferences.md`); Compact/Airy rely entirely on the static
+    /// stylesheet, so this clears the provider rather than loading anything.
+    fn apply_density(&self) {
+        let css = match self.preferences.browser_density() {
+            super::browser_modes::BrowserDensity::Custom(px) => {
+                super::browser_modes::browser_density_custom_css(px)
+            }
+            _ => String::new(),
+        };
+        self.density_provider.load_from_string(&css);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn density_stylesheet(&self) -> String {
+        self.density_provider.to_str().into()
+    }
+
+    /// The shared text-size/frame-density-driven stylesheet (`provider`,
+    /// `TOKEN_STYLE_PRIORITY`): Frame Density's generated rules live here
+    /// (see `frame_density_css`), not in a second independent provider.
+    #[cfg(test)]
+    pub(crate) fn token_stylesheet(&self) -> String {
+        self.provider.to_str().into()
+    }
+
     fn apply_selected(&self) {
         let preview = self.preview.borrow().clone();
         if let Some(tokens) = preview {
@@ -632,9 +674,11 @@ impl ThemeManager {
         } else {
             "transparent"
         };
+        let top_bar_inset = self.preferences.frame_top_bar_density().inset_px();
+        let side_bar_inset = self.preferences.frame_side_bar_density().inset_px();
         self.provider.load_from_string(&format!(
             "{}\n@define-color strata_glow {glow};\n",
-            tokens_css(tokens, root_font_px)
+            tokens_css(tokens, root_font_px, top_bar_inset, side_bar_inset)
         ));
         let family = self.preferences.interface_font();
         self.font_provider
@@ -677,12 +721,15 @@ impl ThemeManager {
             interface_font: self.preferences.interface_font(),
             element_glow: self.preferences.element_glow(),
             file_icon_colors: self.preferences.file_icon_colors(),
+            frame_top_bar_density: self.preferences.frame_top_bar_density(),
+            frame_side_bar_density: self.preferences.frame_side_bar_density(),
         };
         if *self.appearance.borrow() != appearance {
             self.appearance.replace(appearance);
             self.apply_base_stylesheet();
             self.apply_selected();
         }
+        self.apply_density();
         self.theme_listeners.notify(self);
     }
 
@@ -1500,7 +1547,48 @@ fn apply_interface_font(family: Option<&str>, root_font_px: f64) {
     }
 }
 
-fn tokens_css(tokens: &ThemeTokens, root_font_px: f64) -> String {
+/// Frame's two independently adjustable areas' generated vertical-inset rules
+/// (see `docs/preferences.md`), folded into the same text-size-driven
+/// stylesheet as `tokens_css`'s `sizing` block (loaded through the same
+/// `provider`/`TOKEN_STYLE_PRIORITY` pass) so the two can never race or load
+/// through conflicting providers, while staying textually independent: this
+/// never sets `min-height`, a property `sizing` already owns, so neither
+/// block can defeat the other's rule for the same selector. Top Bar covers
+/// the header + tab strip, Miller column headers (the per-column toolbar/
+/// navigation controls), and the preview header/controls — including the
+/// horizontal gap between their icon buttons, via `margin-left` on each
+/// button so consecutive icons space out proportionally to the same value as
+/// the bar's vertical inset — while Side Bar covers only the sidebar rows'
+/// vertical inset. Scoped via classes that only ever apply inside a browser
+/// or chooser window, never Settings or a dialog. Each `inset` is that area's
+/// resolved logical-px value (0 for Compact, 4 for Airy, or the stored Custom
+/// value), applied independently of the other: Compact emits nothing for
+/// that area, matching today's chrome exactly, and a repeated identical
+/// value reloads the same text rather than accumulating padding.
+fn frame_density_css(top_bar_inset: u8, side_bar_inset: u8) -> String {
+    let mut css = String::new();
+    if top_bar_inset != 0 {
+        css.push_str(&format!(
+            "headerbar.browser-header, headerbar.browser-header > windowhandle > box, .tab-strip, .mode-pane-header {{ padding-top: {top_bar_inset}px; padding-bottom: {top_bar_inset}px; }}\n.directory-column .column-header {{ padding-top: {top_bar_inset}px; padding-bottom: {top_bar_inset}px; }}\n.preview-header {{ padding-top: {top_bar_inset}px; padding-bottom: {top_bar_inset}px; }}\n"
+        ));
+        css.push_str(&format!(
+            "headerbar.browser-header .sidebar-toggle, headerbar.browser-header button.header-action, headerbar.browser-header menubutton.header-action > button, .tab-strip button.header-action, .directory-column .column-header button.column-header-action, .directory-column .column-header menubutton.column-header-action > button, .mode-pane-header button.column-header-action, .mode-pane-header menubutton.column-header-action > button, .mode-pane-header .list-navigation-button, .preview-header .preview-header-action {{ margin-left: {top_bar_inset}px; }}\n"
+        ));
+    }
+    if side_bar_inset != 0 {
+        css.push_str(&format!(
+            ".sidebar-row {{ padding-top: {side_bar_inset}px; padding-bottom: {side_bar_inset}px; }}\n"
+        ));
+    }
+    css
+}
+
+fn tokens_css(
+    tokens: &ThemeTokens,
+    root_font_px: f64,
+    top_bar_inset: u8,
+    side_bar_inset: u8,
+) -> String {
     let scale = root_font_px / 13.0;
     let header = (40.0 * scale).round();
     // Column headers add six pixels of padding and three extra border pixels.
@@ -1526,7 +1614,7 @@ fn tokens_css(tokens: &ThemeTokens, root_font_px: f64) -> String {
         tokens.border,
         tokens.dim_text,
     );
-    colors + &sizing
+    colors + &sizing + &frame_density_css(top_bar_inset, side_bar_inset)
 }
 
 /// Parses colours GTK accepts (`#rgb`, `#rrggbb`, `rgb(...)`, names) into 8-bit

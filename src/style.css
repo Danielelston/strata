@@ -400,6 +400,38 @@ headerbar.browser-header menubutton.header-action > button {
   opacity: 0.42;
 }
 
+.appearance-density-accordion {
+  margin: 0;
+}
+
+.appearance-density-toggle {
+  min-height: 26px;
+}
+
+.appearance-density-value {
+  color: @strata_dim_text;
+  font-size: 0.92em;
+}
+
+.appearance-density-chevron {
+  transition: transform 160ms ease-out;
+}
+
+.appearance-density-toggle.expanded .appearance-density-chevron {
+  transform: rotate(90deg);
+}
+
+.appearance-density-custom-row {
+  min-height: 26px;
+}
+
+/* Indents the revealed Compact/Airy/Custom options under their row's
+   toggle, so the expanded content visually reads as contained inside that
+   row's own dropdown rather than as sibling top-level menu items. */
+.appearance-density-options {
+  padding-left: 20px;
+}
+
 .appearance-text-size {
   margin: 2px 8px;
 }

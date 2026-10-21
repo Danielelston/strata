@@ -99,3 +99,71 @@ fn scroll_refresh_waits_for_scrolling_to_stop() {
         },
     );
 }
+
+#[test]
+fn browser_density_custom_clamps_into_zero_to_sixteen() {
+    assert_eq!(BrowserDensity::custom(0), BrowserDensity::Custom(0));
+    assert_eq!(BrowserDensity::custom(16), BrowserDensity::Custom(16));
+    assert_eq!(BrowserDensity::custom(17), BrowserDensity::Custom(16));
+    assert_eq!(BrowserDensity::custom(255), BrowserDensity::Custom(16));
+}
+
+#[test]
+fn frame_density_custom_clamps_into_zero_to_twelve() {
+    assert_eq!(FrameDensity::custom(0), FrameDensity::Custom(0));
+    assert_eq!(FrameDensity::custom(12), FrameDensity::Custom(12));
+    assert_eq!(FrameDensity::custom(13), FrameDensity::Custom(12));
+    assert_eq!(FrameDensity::custom(255), FrameDensity::Custom(12));
+}
+
+#[test]
+fn density_icons_columns_fixes_custom_at_twenty_regardless_of_px() {
+    for px in [0, 4, 8, 16] {
+        assert_eq!(
+            density_icons_columns(BrowserDensity::custom(px)),
+            20,
+            "Custom icon-grid max columns must always be 20, not inherited from a preset"
+        );
+    }
+    assert_eq!(density_icons_columns(BrowserDensity::Compact), 20);
+    assert_eq!(density_icons_columns(BrowserDensity::Airy), 16);
+}
+
+#[test]
+fn browser_density_custom_css_only_sets_vertical_properties() {
+    let css = browser_density_custom_css(8);
+    // Only vertical spacing: no horizontal margin/padding, no min-height, no
+    // font-size, and no icon/image sizing.
+    assert!(!css.contains("margin-left"));
+    assert!(!css.contains("margin-right"));
+    assert!(!css.contains("padding-left"));
+    assert!(!css.contains("padding-right"));
+    assert!(!css.contains("min-height"));
+    assert!(!css.contains("font-size"));
+    assert!(!css.contains("min-width"));
+    // The stored px value drives row/list-row margins directly.
+    assert!(
+        css.contains(
+            ".density-custom .file-row > * {\n  margin-top: 8px;\n  margin-bottom: 8px;\n}"
+        )
+    );
+    assert!(css.contains(
+        ".mode-list.density-custom .list-row > * {\n  margin-top: 8px;\n  margin-bottom: 8px;\n}"
+    ));
+    // The content-wrapper correction is half the outer margin, mirroring Airy's.
+    assert!(css.contains(
+        ".density-custom .file-row > .file-row-content {\n  margin-top: 4px;\n  margin-bottom: 4px;\n}"
+    ));
+}
+
+#[test]
+fn browser_density_custom_css_is_empty_at_zero_but_present() {
+    // 0px is a valid Custom value: selectors still emit (0px insets), never a
+    // missing/invalid stylesheet.
+    let css = browser_density_custom_css(0);
+    assert!(
+        css.contains(
+            ".density-custom .file-row > * {\n  margin-top: 0px;\n  margin-bottom: 0px;\n}"
+        )
+    );
+}
