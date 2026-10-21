@@ -61,7 +61,7 @@ fn density_scales(popover: &gtk::Popover) -> [gtk::Scale; 2] {
         .filter_map(|widget| widget.downcast::<gtk::Scale>().ok())
         .filter(|scale| scale.has_css_class("appearance-density-scale"))
         .collect();
-    scales.try_into().expect("Content and Frame sliders")
+    scales.try_into().expect("Frame and Content sliders")
 }
 
 fn snap_label(scale: &gtk::Scale, label: &str) -> gtk::Button {
@@ -107,7 +107,7 @@ fn dragging_a_density_slider_changes_only_its_area_and_keeps_the_menu_open() {
             preferences.set_browser_density(BrowserDensity::Compact);
             preferences.set_frame_density(FrameDensity::Compact);
             let (window, popover) = open_appearance_menu(preferences.clone());
-            let [content, frame] = density_scales(&popover);
+            let [frame, content] = density_scales(&popover);
 
             content.set_value(6.0);
             assert_eq!(preferences.browser_density(), BrowserDensity::Custom(6));
@@ -134,7 +134,7 @@ fn snap_labels_select_their_preset_and_follow_changes_from_other_windows() {
             let preferences = PreferenceManager::shared();
             preferences.set_browser_density(BrowserDensity::from_px(11));
             let (window, popover) = open_appearance_menu(preferences.clone());
-            let [content, _] = density_scales(&popover);
+            let [_, content] = density_scales(&popover);
             let compact = snap_label(&content, "Compact");
             let airy = snap_label(&content, "Airy");
             assert_eq!(content.value(), 11.0);

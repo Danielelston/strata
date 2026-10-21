@@ -478,15 +478,15 @@ and Icons. See
 
 ## Content and Frame density
 
-The Appearance menu's DENSITY section has two sliders. Each one stores a logical px
+The Appearance menu's DENSITY section has two sliders, Frame above Content. Each one stores a logical px
 value, with tick marks at its Compact and Airy values. The clickable labels under the
 ticks snap to those presets. Any other value counts as Custom. A slider position
 updates live in every window and is saved immediately; the menu stays open.
 
 | Slider  | Preferences                                     | Range | Compact | Airy | Type             |
 |---------|-------------------------------------------------|-------|---------|------|------------------|
-| Content | `browser_density`, `browser_density_custom_px`  | 0–16  | 4       | 8    | `BrowserDensity` |
 | Frame   | `frame_density`, `frame_density_custom_px`      | 0–12  | 0       | 4    | `FrameDensity`   |
+| Content | `browser_density`, `browser_density_custom_px`  | 0–16  | 4       | 8    | `BrowserDensity` |
 
 `*_density` is `"compact"`, `"airy"`, or `"custom"`; `*_custom_px` is read only for
 `"custom"`. Old settings files that have only `browser_density` keep loading. Both

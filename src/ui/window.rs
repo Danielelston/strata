@@ -905,15 +905,15 @@ pub(super) fn build_appearance_menu(
     append_menu_heading(&content, &crate::i18n::tr("DENSITY"));
     content.append(&density_slider::density_slider(
         &preferences,
-        "Content",
-        PreferenceManager::browser_density,
-        PreferenceManager::set_browser_density,
-    ));
-    content.append(&density_slider::density_slider(
-        &preferences,
         "Frame",
         PreferenceManager::frame_density,
         PreferenceManager::set_frame_density,
+    ));
+    content.append(&density_slider::density_slider(
+        &preferences,
+        "Content",
+        PreferenceManager::browser_density,
+        PreferenceManager::set_browser_density,
     ));
 
     content.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
